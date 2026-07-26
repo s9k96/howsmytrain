@@ -1,0 +1,24 @@
+# Example cron schedule for this project (macOS/Linux).
+#
+# Install with: crontab -e   (paste the lines below, adjusting PROJECT_DIR
+# and VENV_PYTHON to your actual paths), or:
+#   (crontab -l 2>/dev/null; cat crontab.example) | crontab -
+#
+# Adjust PROJECT_DIR to wherever you unzipped/cloned this project, and
+# VENV_PYTHON to your virtualenv's python (e.g. PROJECT_DIR/.venv/bin/python).
+
+PROJECT_DIR=/absolute/path/to/howsmytrain
+VENV_PYTHON=/absolute/path/to/howsmytrain/.venv/bin/python
+
+# Poll every 2 hours between 5am and 11pm IST (10 runs/day) -- each run polls
+# EVERY train number in TRAIN_NUMBERS, so total daily requests = (cron runs
+# per day) x (number of trains tracked). RailRadar's free tier caps at 50
+# requests/day, 10/min burst, so budget accordingly:
+#   - 1-2 trains  -> every 1 hour is safe (~18-36 req/day)
+#   - 3-4 trains  -> every 2 hours is safe (~40-60 req/day, watch the top end)
+#   - 5+ trains   -> every 3-4 hours, or narrow the cron hour range to each
+#                    train's actual running window instead of 5am-11pm
+0 5-23/2 * * * cd $PROJECT_DIR && $VENV_PYTHON scripts/poll_once.py >> logs/poll.log 2>&1
+
+# Generate the weekly markdown report every Monday at 8am IST.
+0 8 * * 1 cd $PROJECT_DIR && $VENV_PYTHON scripts/weekly_report.py >> logs/weekly_report.log 2>&1

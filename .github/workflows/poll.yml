@@ -1,0 +1,42 @@
+name: Poll train delays
+
+# Fires on a fixed interval; scripts/poll_due.py decides which trains are
+# actually due and makes zero API calls when none are. This is deliberately
+# NOT one cron per train: arrival times shift with the timetable, and GitHub's
+# scheduled runs drift 5-20 minutes under load (and occasionally skip). A wide
+# due-window plus frequent cheap checks tolerates both.
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 min UTC; poll_due.py works in IST
+  workflow_dispatch:
+    inputs:
+      all:
+        description: "Poll every configured train, ignoring the due window"
+        type: boolean
+        default: false
+
+concurrency:
+  group: poll
+  cancel-in-progress: false   # never cut a run off mid-write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Poll trains that are due
+        env:
+          RAILRADAR_API_KEY: ${{ secrets.RAILRADAR_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TRAIN_NUMBERS: ${{ vars.TRAIN_NUMBERS }}
+        run: python scripts/poll_due.py ${{ inputs.all && '--all' || '' }}

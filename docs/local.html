@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HowsMyTrain</title>
+<link rel="stylesheet" href="./styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="top">
+      <div>
+        <h1>HowsMyTrain</h1>
+        <div class="meta" id="last-updated">Loading…</div>
+      </div>
+      <div>
+        <a href="./db.html"><button>DB view</button></a>
+        <button id="theme-toggle">🌙 Dark</button>
+      </div>
+    </header>
+
+    <div class="kpi-row" id="kpi-row"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Weekly average delay by train</h2>
+        <div class="card-actions">
+          <button id="toggle-trend-table">Table view</button>
+        </div>
+      </div>
+      <canvas id="trend-chart" height="90"></canvas>
+      <div class="empty-state hidden" id="trend-empty">
+        Not enough data yet — check back after a few days of polling.
+      </div>
+      <div id="trend-table-container" class="hidden"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Recent polls</h2>
+      </div>
+      <div id="polls-table-container"></div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DB view · HowsMyTrain</title>
+<link rel="stylesheet" href="./styles.css">
+<style>
+  /* Raw table can be wide/long -- let it scroll inside the card. */
+  .db-scroll { overflow-x: auto; max-height: 70vh; overflow-y: auto; }
+  .db-scroll thead th { position: sticky; top: 0; background: var(--surface-1); }
+  .filters { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .filters select, .filters input {
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-primary); border-radius: 8px; padding: 6px 10px; font-size: 13px;
+  }
+  .filters label { color: var(--text-muted); font-size: 12px; }
+  td.mono { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+  <div class="page">
+    <header class="top">
+      <div>
+        <h1>DB view — <code>polls</code></h1>
+        <div class="meta" id="summary">Loading…</div>
+      </div>
+      <div>
+        <a href="./local.html"><button>← Dashboard</button></a>
+        <button id="theme-toggle">🌙 Dark</button>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="filters">
+        <label for="train-filter">Train</label>
+        <select id="train-filter"><option value="">All</option></select>
+        <label for="limit">Rows</label>
+        <select id="limit">
+          <option>200</option><option>500</option><option selected>2000</option>
+        </select>
+        <button id="refresh">Refresh</button>
+      </div>
+      <div class="db-scroll" id="table-container"></div>
+    </div>
+  </div>
+
+<script>
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
+  return res.json();
+}
+
+function delayClass(m) {
+  if (m === null || m === undefined) return "";
+  if (m <= 10) return "on-time";
+  if (m <= 30) return "late";
+  return "very-late";
+}
+
+// Escape API-supplied strings -- they end up in innerHTML below.
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+let names = {};
+
+function render(polls) {
+  const container = document.getElementById("table-container");
+  if (!polls.length) {
+    container.innerHTML = `<div class="empty-state">No rows. Run <code>python scripts/poll_once.py</code> first.</div>`;
+    return;
+  }
+  const rows = polls.map(p => `
+    <tr>
+      <td class="mono">${p.id}</td>
+      <td class="mono">${esc(p.journey_date)}</td>
+      <td>${esc(p.train_number)}${names[p.train_number] ? " · " + esc(names[p.train_number]) : ""}</td>
+      <td class="${delayClass(p.delay_minutes)}">${p.delay_minutes === null ? "–" : p.delay_minutes + " min"}</td>
+      <td>${esc(p.status ?? "–")}</td>
+      <td>${esc(p.current_station_code ?? "–")}</td>
+      <td class="mono">${new Date(p.polled_at).toLocaleString()}</td>
+    </tr>
+  `).join("");
+  container.innerHTML = `
+    <table class="tabular">
+      <thead><tr>
+        <th>id</th><th>journey_date</th><th>train</th><th>delay</th>
+        <th>status</th><th>station</th><th>polled_at (fetched)</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function load() {
+  const train = document.getElementById("train-filter").value;
+  const limit = document.getElementById("limit").value;
+  const qs = `?limit=${limit}` + (train ? `&train_number=${encodeURIComponent(train)}` : "");
+  try {
+    const polls = await fetchJSON("/api/polls" + qs);
+    render(polls);
+    const dates = new Set(polls.map(p => p.journey_date));
+    document.getElementById("summary").textContent =
+      `${polls.length} row${polls.length === 1 ? "" : "s"} · ${dates.size} journey date${dates.size === 1 ? "" : "s"} · loaded ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    console.error(err);
+    document.getElementById("summary").textContent = "Failed to load — is the server running?";
+  }
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  const sel = document.getElementById("train-filter");
+  try {
+    const trains = await fetchJSON("/api/trains");
+    names = Object.fromEntries(trains.map(t => [t.train_number, t.name]));
+    for (const t of trains) {
+      const o = document.createElement("option");
+      o.value = t.train_number;
+      o.textContent = t.name ? `${t.train_number} · ${t.name}` : t.train_number;
+      sel.appendChild(o);
+    }
+  } catch (err) { console.error(err); }
+
+  sel.addEventListener("change", load);
+  document.getElementById("limit").addEventListener("change", load);
+  document.getElementById("refresh").addEventListener("click", load);
+
+  let dark = false;
+  document.getElementById("theme-toggle").addEventListener("click", (e) => {
+    dark = !dark;
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    e.target.textContent = dark ? "☀️ Light" : "🌙 Dark";
+  });
+
+  load();
+});
+</script>
+</body>
+</html>
