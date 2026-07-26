@@ -5,7 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HowsMyTrain</title>
 <link rel="stylesheet" href="./styles.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<!-- Vendored, not CDN: the cdnjs URL this used to point at 404s, and a
+     dashboard that dies without network access to a third party is worse
+     than a 200KB file in the repo. -->
+<script src="./vendor/chart.umd.min.js"></script>
 <style>
   .banner {
     background: var(--surface-1); border: 1px solid var(--border);
@@ -195,15 +198,26 @@ async function main() {
       sb("weekly_stats", "select=*&order=iso_week"),
       sb("daily_delays", "select=*&order=journey_date.desc,train_number&limit=200"),
     ]);
+    // KPIs and the table first, and the chart isolated: a chart failure
+    // (missing Chart.js, canvas issue) must not blank out data that loaded fine.
     renderKPIs(trains);
-    renderTrend(weekly, trains);
     renderDaily(daily);
+    try {
+      renderTrend(weekly, trains);
+    } catch (chartErr) {
+      console.error(chartErr);
+      document.getElementById("trend-empty").textContent =
+        "Chart unavailable: " + chartErr.message;
+      document.getElementById("trend-empty").classList.remove("hidden");
+      document.getElementById("trend-chart").classList.add("hidden");
+    }
     document.getElementById("last-updated").textContent =
       `${daily.length} journey${daily.length === 1 ? "" : "s"} recorded · loaded ${new Date().toLocaleTimeString()}`;
   } catch (err) {
     console.error(err);
-    document.getElementById("last-updated").textContent =
-      "Failed to load from Supabase — check the URL/anon key and that schema.sql has been run.";
+    // Show the real reason (status + PostgREST body) rather than a generic
+    // string -- a 401 vs 404 vs network failure need completely different fixes.
+    document.getElementById("last-updated").textContent = "Failed to load: " + err.message;
   }
 }
 
