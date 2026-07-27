@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DB view · HowsMyTrain</title>
 <link rel="stylesheet" href="./styles.css">
+<script src="./common.js"></script>
 <style>
   /* Raw table can be wide/long -- let it scroll inside the card. */
   .db-scroll { overflow-x: auto; max-height: 70vh; overflow-y: auto; }
@@ -19,16 +20,7 @@
 </style>
 </head>
 <body>
-  <div class="appbar">
-    <div class="appbar-inner">
-      <a class="brand" href="./index.html"><span class="mark">🚆</span>HowsMyTrain</a>
-      <nav class="nav">
-        <a href="./index.html">Fleet</a>
-        <a href="./db.html" aria-current="page">Raw data</a>
-        <button id="theme-toggle">🌙 Dark</button>
-      </nav>
-    </div>
-  </div>
+  <div id="nav-slot"></div>
 
   <div class="page">
     <div class="page-head">
@@ -52,31 +44,14 @@
   </div>
 
 <script>
-// Reads Supabase directly, same as the other pages -- this used to hit the
-// local FastAPI /api routes, which meant the page was dead on GitHub Pages.
-const SUPABASE_URL = "https://frmcmbfiyvwtixvngqde.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_EIpHf86JIDEvUgSijFv4DQ_n9Qcjik0";
-
-async function sb(view, query) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${view}?${query}`, {
-    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-  });
-  if (!res.ok) throw new Error(`${view} -> HTTP ${res.status}: ${await res.text()}`);
-  return res.json();
-}
+// Supabase access and formatting helpers live in common.js. This page used to
+// hit the local FastAPI /api routes, which meant it was dead on GitHub Pages.
 
 function delayClass(m) {
   if (m === null || m === undefined) return "";
   if (m <= 10) return "on-time";
   if (m <= 30) return "late";
   return "very-late";
-}
-
-// Escape API-supplied strings -- they end up in innerHTML below.
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, c => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
-  ));
 }
 
 let names = {};
@@ -126,6 +101,7 @@ async function load() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  document.getElementById("nav-slot").innerHTML = appbar("db");
   const sel = document.getElementById("train-filter");
   try {
     const trains = await sb("trains", "select=train_number,name&order=train_number");
@@ -142,14 +118,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("limit").addEventListener("change", load);
   document.getElementById("refresh").addEventListener("click", load);
 
-  const toggle = document.getElementById("theme-toggle");
-  let dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
-  toggle.addEventListener("click", () => {
-    dark = !dark;
-    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-    toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
-  });
+  setupTheme();
 
   load();
 });

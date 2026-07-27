@@ -9,6 +9,7 @@
      dashboard that dies without network access to a third party is worse
      than a 200KB file in the repo. -->
 <script src="./vendor/chart.umd.min.js"></script>
+<script src="./common.js"></script>
 <style>
   .banner {
     background: var(--surface-1); border: 1px solid var(--border);
@@ -20,16 +21,7 @@
 </style>
 </head>
 <body>
-  <div class="appbar">
-    <div class="appbar-inner">
-      <a class="brand" href="./index.html"><span class="mark">🚆</span>HowsMyTrain</a>
-      <nav class="nav">
-        <a href="./index.html" aria-current="page">Fleet</a>
-        <a href="./db.html">Raw data</a>
-        <button id="theme-toggle">🌙 Dark</button>
-      </nav>
-    </div>
-  </div>
+  <div id="nav-slot"></div>
 
   <div class="page">
     <div class="page-head">
@@ -79,77 +71,10 @@
   </div>
 
 <script>
-// ---------------------------------------------------------------------------
-// Fill these in after creating your Supabase project (Settings -> API).
-// The anon key is meant to be public: supabase/schema.sql grants it SELECT
-// only, and every write uses the service key from GitHub Actions secrets.
-// ---------------------------------------------------------------------------
-const SUPABASE_URL = "https://frmcmbfiyvwtixvngqde.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_EIpHf86JIDEvUgSijFv4DQ_n9Qcjik0";
-
-const SERIES_SLOTS = [
-  "--series-1", "--series-2", "--series-3", "--series-4",
-  "--series-5", "--series-6", "--series-7", "--series-8",
-];
-
-const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-const seriesColor = (i) => cssVar(SERIES_SLOTS[i % SERIES_SLOTS.length]);
-
-function configured() {
-  return !SUPABASE_URL.includes("YOUR-PROJECT") && !SUPABASE_ANON_KEY.includes("YOUR_ANON");
-}
-
-async function sb(view, query = "select=*") {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${view}?${query}`, {
-    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-  });
-  if (!res.ok) throw new Error(`${view} -> HTTP ${res.status}: ${await res.text()}`);
-  return res.json();
-}
-
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, c => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
-  ));
-}
-
-// Delay bands double as status: they mean good/bad, not identity.
-function band(m) {
-  if (m === null || m === undefined) return { cls: "idle", text: "No data" };
-  if (m <= 10) return { cls: "good", text: "On time" };
-  if (m <= 30) return { cls: "warn", text: "Slight delay" };
-  return { cls: "bad", text: "Late" };
-}
+// Supabase access, formatting and schedule helpers live in common.js.
 
 let allTrains = [];      // train_summary rows that have at least one journey
 let waitingTrains = [];  // tracked but nothing recorded yet
-
-const WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-const DAY_LABEL = { mon: "M", tue: "T", wed: "W", thu: "T", fri: "F", sat: "S", sun: "S" };
-
-// Seven fixed slots so the pattern is comparable down the column at a glance --
-// a list like "Tue, Thu, Fri" has to be read, this can be scanned.
-function runDaysDots(days) {
-  if (!days || !days.length) return '<span class="dim">unknown</span>';
-  const set = new Set(days);
-  const title = days.length === 7 ? "Daily" : days.join(", ");
-  return `<span class="days" title="${title}" aria-label="Runs ${title}">` +
-    WEEK.map(d => `<i class="${set.has(d) ? "on" : ""}">${DAY_LABEL[d]}</i>`).join("") +
-    `</span>`;
-}
-
-const hhmm = (t) => (t ? String(t).slice(0, 5) : "–");
-
-function routeText(t) {
-  if (!t.source_code && !t.destination_code) return '<span class="dim">–</span>';
-  return `${esc(t.source_code || "?")}<span class="arrow">→</span>${esc(t.destination_code || "?")}`;
-}
-
-function timingText(t) {
-  if (!t.scheduled_departure && !t.scheduled_arrival) return '<span class="dim">–</span>';
-  const plus = t.arrival_day_offset ? `<sup class="plus">+${t.arrival_day_offset}</sup>` : "";
-  return `${hhmm(t.scheduled_departure)}<span class="arrow">→</span>${hhmm(t.scheduled_arrival)}${plus}`;
-}
 
 function renderHero(trains) {
   const withData = trains.filter(t => t.journeys_observed > 0);
@@ -212,17 +137,6 @@ function renderWaiting(trains) {
       }).join("")}</tbody>
     </table>`;
   wireRows(container);
-}
-
-// Whole row clickable for convenience; the train number stays a real link so
-// keyboard and middle-click still work.
-function wireRows(container) {
-  container.querySelectorAll("tr[data-href]").forEach(tr => {
-    tr.addEventListener("click", (e) => {
-      if (e.target.closest("a")) return;
-      location.href = tr.dataset.href;
-    });
-  });
 }
 
 function renderFleet(trains) {
@@ -380,20 +294,9 @@ async function main() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("nav-slot").innerHTML = appbar("fleet");
+  setupTheme(main);
   document.getElementById("filter").addEventListener("input", applyFilter);
-
-  // Seed from the OS preference, else the first click is a no-op for anyone
-  // already in dark mode.
-  const toggle = document.getElementById("theme-toggle");
-  let dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
-  toggle.addEventListener("click", () => {
-    dark = !dark;
-    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-    toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
-    main();
-  });
-
   main();
 });
 </script>

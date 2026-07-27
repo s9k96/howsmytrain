@@ -6,6 +6,7 @@
 <title>Train · HowsMyTrain</title>
 <link rel="stylesheet" href="./styles.css">
 <script src="./vendor/chart.umd.min.js"></script>
+<script src="./common.js"></script>
 <style>
   .table-scroll { overflow-x: auto; }
   .note { color: var(--text-muted); font-size: 12px; margin-top: 10px; }
@@ -14,17 +15,14 @@
 </style>
 </head>
 <body>
+  <div id="nav-slot"></div>
+
   <div class="page">
-    <header class="top">
-      <div>
-        <h1 id="train-title">Loading…</h1>
-        <div class="subtitle" id="train-subtitle"></div>
-      </div>
-      <div>
-        <a href="./index.html"><button>← All trains</button></a>
-        <button id="theme-toggle">🌙 Dark</button>
-      </div>
-    </header>
+    <div class="page-head">
+      <div class="eyebrow"><a href="./index.html">← All trains</a></div>
+      <h1 id="train-title">Loading…</h1>
+      <div class="meta" id="train-subtitle"></div>
+    </div>
 
     <div class="kpi-row" id="kpi-row"></div>
 
@@ -48,8 +46,7 @@
   </div>
 
 <script>
-const SUPABASE_URL = "https://frmcmbfiyvwtixvngqde.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_EIpHf86JIDEvUgSijFv4DQ_n9Qcjik0";
+// Supabase access, formatting and schedule helpers live in common.js.
 
 // A histogram needs enough observations to have a shape; below this it is just
 // a bar per day dressed up as a distribution (see dataviz anti-patterns:
@@ -67,28 +64,13 @@ const BINS = [
   { label: "Over 2h",        test: (d) => d > 120 },
 ];
 
-const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = (m) => (m === null || m === undefined ? "–" : `${m} min`);
-
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, c => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
-  ));
-}
 
 function delayClass(m) {
   if (m === null || m === undefined) return "";
   if (m <= 10) return "on-time";
   if (m <= 30) return "late";
   return "very-late";
-}
-
-async function sb(view, query) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${view}?${query}`, {
-    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-  });
-  if (!res.ok) throw new Error(`${view} -> HTTP ${res.status}: ${await res.text()}`);
-  return res.json();
 }
 
 function median(xs) {
@@ -98,13 +80,9 @@ function median(xs) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
-// Delay bands are status (good/bad), so they wear the status tokens.
-function band(m) {
-  if (m === null || m === undefined) return "";
-  if (m <= 10) return "good";
-  if (m <= 30) return "warn";
-  return "bad";
-}
+// Just the class name -- common.js's band() returns {cls, text} and would
+// otherwise be shadowed by this.
+const tone = (m) => (m === null || m === undefined ? "" : band(m).cls);
 
 function renderKPIs(summary, delays) {
   const avg = delays.length ? Math.round(summary.avg_delay_minutes ?? 0) : null;
@@ -114,9 +92,9 @@ function renderKPIs(summary, delays) {
 
   const tiles = [
     ["Journeys observed", delays.length, "", ""],
-    ["Average delay", avg, "min", band(avg)],
-    ["Median delay", med, "min", band(med)],
-    ["Worst delay", worst, "min", band(worst)],
+    ["Average delay", avg, "min", tone(avg)],
+    ["Median delay", med, "min", tone(med)],
+    ["Worst delay", worst, "min", tone(worst)],
     ["On time", pct, "%", pct === null ? "" : (pct >= 70 ? "good" : pct >= 40 ? "warn" : "bad")],
   ];
   document.getElementById("kpi-row").innerHTML = tiles.map(([label, value, unit, tone]) => `
@@ -313,15 +291,8 @@ async function main() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  const toggle = document.getElementById("theme-toggle");
-  let dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
-  toggle.addEventListener("click", () => {
-    dark = !dark;
-    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-    toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
-    main();  // charts re-read CSS vars on re-render
-  });
+  document.getElementById("nav-slot").innerHTML = appbar("fleet");
+  setupTheme(main);   // charts re-read CSS vars on re-render
   main();
 });
 </script>

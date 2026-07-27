@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Collection health · HowsMyTrain</title>
+<link rel="stylesheet" href="./styles.css">
+<script src="./common.js"></script>
+<style>
+  .table-scroll { overflow-x: auto; }
+  .cov { display: flex; align-items: center; gap: 9px; min-width: 150px; }
+  .cov .bar-track { flex: 1; }
+  .miss { font-size: 12px; color: var(--text-muted); }
+  .miss b { color: var(--status-serious); font-weight: 600; }
+</style>
+</head>
+<body>
+  <div id="nav-slot"></div>
+
+  <div class="page">
+    <div class="page-head">
+      <div class="eyebrow">Pipeline status</div>
+      <h1>Collection health</h1>
+      <div class="meta" id="subtitle">Loading…</div>
+    </div>
+
+    <div class="hero" id="hero"></div>
+
+    <div class="card">
+      <div class="card-head"><h2>Daily coverage</h2></div>
+      <p class="waiting-note">
+        Expected counts only trains scheduled to arrive that day, so a light
+        day is usually a sparse timetable rather than a failure. Today counts
+        a train only once its arrival window has passed.
+      </p>
+      <div class="table-scroll" id="days"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Trains needing attention</h2></div>
+      <div class="table-scroll" id="attention"></div>
+    </div>
+  </div>
+
+<script>
+const DAYS_BACK = 14;
+const WINDOW_AFTER_MIN = 90;   // matches AFTER in scripts/poll_due.py
+
+function minutesOfDay(t) {
+  if (!t) return null;
+  const [h, m] = String(t).split(":");
+  return Number(h) * 60 + Number(m);
+}
+
+/** For today, a train only counts as expected once its window has closed. */
+function windowClosed(train, now) {
+  const arr = minutesOfDay(train.scheduled_arrival);
+  if (arr === null) return true;
+  return now.getHours() * 60 + now.getMinutes() > arr + WINDOW_AFTER_MIN;
+}
+
+function coverageBar(actual, expected) {
+  const pct = expected ? Math.round(100 * actual / expected) : 100;
+  const cls = pct >= 95 ? "good" : pct >= 70 ? "warn" : "bad";
+  return `<div class="cov">
+      <div class="bar-track"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>
+      <span class="d-${cls}">${pct}%</span>
+    </div>`;
+}
+
+function render(trains, polls, now) {
+  const byDate = {};
+  for (const p of polls) (byDate[p.journey_date] ||= new Set()).add(p.train_number);
+
+  const today = isoDate(now);
+  const rows = [];
+  for (let i = 0; i < DAYS_BACK; i++) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const key = isoDate(d);
+    const expectedTrains = trains.filter(t =>
+      arrivesOn(t, d) && (key !== today || windowClosed(t, now))
+    );
+    const got = byDate[key] || new Set();
+    const missed = expectedTrains.filter(t => !got.has(t.train_number));
+    rows.push({ key, d, expected: expectedTrains.length, actual: got.size, missed });
+  }
+
+  // Only days from the first poll onward -- before that there was nothing to miss.
+  const dates = Object.keys(byDate).sort();
+  const firstDay = dates[0];
+  const scored = rows.filter(r => firstDay && r.key >= firstDay);
+
+  const totExp = scored.reduce((a, r) => a + r.expected, 0);
+  const totAct = scored.reduce((a, r) => a + Math.min(r.actual, r.expected), 0);
+  const lastPoll = polls.length
+    ? new Date(Math.max(...polls.map(p => new Date(p.polled_at))))
+    : null;
+  const hoursSince = lastPoll ? (now - lastPoll) / 36e5 : null;
+  const staleTone = hoursSince === null ? "bad" : hoursSince < 26 ? "good" : hoursSince < 48 ? "warn" : "bad";
+  const covPct = totExp ? Math.round(100 * totAct / totExp) : null;
+
+  document.getElementById("hero").innerHTML = [
+    ["Last poll", lastPoll ? `${Math.round(hoursSince)}` : "–", lastPoll ? "h ago" : "",
+      lastPoll ? lastPoll.toLocaleString() : "nothing recorded", "--series-1", staleTone],
+    ["Coverage", covPct === null ? "–" : covPct, covPct === null ? "" : "%",
+      `${totAct} of ${totExp} expected polls`, "--series-3",
+      covPct === null ? "" : covPct >= 95 ? "good" : covPct >= 70 ? "warn" : "bad"],
+    ["Today", `${(byDate[today] || new Set()).size}`, "",
+      `${rows[0].expected} expected so far today`, "--series-7", ""],
+    ["Trains tracked", trains.length, "",
+      `${trains.filter(t => !t.run_days).length} schedules still unknown`, "--series-2", ""],
+  ].map(([k, v, unit, d, hue, tone]) => `
+    <div class="stat" style="--accent: var(${hue})">
+      <div class="k">${k}</div>
+      <div class="v ${tone}">${v}${unit ? `<span class="unit">${unit}</span>` : ""}</div>
+      <div class="d">${d}</div>
+    </div>`).join("");
+
+  document.getElementById("days").innerHTML = `
+    <table class="fleet tabular">
+      <thead><tr><th>Date</th><th>Day</th><th class="num">Expected</th><th class="num">Polled</th>
+        <th>Coverage</th><th>Missed</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr>
+          <td>${r.key}${r.key === today ? ' <span class="dim">(today)</span>' : ""}</td>
+          <td class="dim">${r.d.toLocaleDateString(undefined, { weekday: "short" })}</td>
+          <td class="num">${r.expected}</td>
+          <td class="num">${r.actual}</td>
+          <td>${r.expected ? coverageBar(r.actual, r.expected) : '<span class="dim">—</span>'}</td>
+          <td class="miss">${
+            !firstDay || r.key < firstDay ? '<span class="dim">before tracking</span>'
+            : r.missed.length ? `<b>${r.missed.length}</b> · ${r.missed.slice(0, 6).map(t => esc(t.train_number)).join(", ")}${r.missed.length > 6 ? "…" : ""}`
+            : '<span class="d-good">complete</span>'
+          }</td>
+        </tr>`).join("")}</tbody>
+    </table>`;
+
+  // Anything expected in the last 3 scored days but never seen.
+  const recent = scored.slice(0, 3);
+  const problem = trains.map(t => {
+    const missedDays = recent.filter(r => r.missed.some(m => m.train_number === t.train_number)).length;
+    const everPolled = polls.some(p => p.train_number === t.train_number);
+    return { t, missedDays, everPolled };
+  }).filter(x => x.missedDays > 0 || !x.everPolled);
+
+  document.getElementById("attention").innerHTML = !problem.length
+    ? `<div class="empty-state">Nothing outstanding — every expected poll has landed.</div>`
+    : `<table class="fleet tabular">
+        <thead><tr><th>Train</th><th>Route</th><th>Dep → Arr</th><th>Runs on</th>
+          <th class="num">Missed</th><th>State</th></tr></thead>
+        <tbody>${problem.map(({ t, missedDays, everPolled }) => {
+          const href = `./train.html?train=${encodeURIComponent(t.train_number)}`;
+          const tone = !everPolled ? "idle" : missedDays >= 2 ? "bad" : "warn";
+          const label = !everPolled ? "Never polled" : missedDays >= 2 ? "Repeatedly missed" : "Missed once";
+          return `<tr data-href="${href}">
+            <td><a href="${href}" class="t-num">${esc(t.train_number)}</a>
+                <span class="t-name">${esc(t.name || "—")}</span></td>
+            <td class="route">${routeText(t)}</td>
+            <td class="timing">${timingText(t)}</td>
+            <td>${runDaysDots(t.run_days)}</td>
+            <td class="num">${missedDays || "–"}</td>
+            <td><span class="pill ${tone}">${label}</span></td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>`;
+  wireRows(document.getElementById("attention"));
+
+  document.getElementById("subtitle").textContent =
+    `${trains.length} trains · last ${DAYS_BACK} days · checked ${now.toLocaleTimeString()}`;
+}
+
+async function main() {
+  document.getElementById("nav-slot").innerHTML = appbar("health");
+  setupTheme();
+  if (!configured()) {
+    document.getElementById("subtitle").textContent = "Awaiting Supabase config";
+    return;
+  }
+  try {
+    const since = new Date();
+    since.setDate(since.getDate() - DAYS_BACK);
+    const [trains, polls] = await Promise.all([
+      sb("train_summary", "select=*&order=train_number"),
+      sb("polls", `select=train_number,journey_date,polled_at&journey_date=gte.${isoDate(since)}&limit=5000`),
+    ]);
+    render(trains, polls, new Date());
+  } catch (err) {
+    console.error(err);
+    document.getElementById("subtitle").textContent = "Failed to load: " + err.message;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", main);
+</script>
+</body>
+</html>
