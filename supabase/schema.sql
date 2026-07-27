@@ -10,18 +10,22 @@
 --     dashboard can read it straight from PostgREST with no backend.
 
 create table if not exists trains (
-    train_number       text primary key,
-    name               text,
-    destination_code   text,
-    scheduled_arrival  time,          -- IST local time of arrival at destination
-    run_days           text[],        -- DEPARTURE days at source: {tue,thu,fri,sun}
-    arrival_day_offset integer not null default 0,  -- days from departure to arrival
-    updated_at         timestamptz not null default now()
+    train_number        text primary key,
+    name                text,
+    source_code         text,
+    destination_code    text,
+    scheduled_departure time,          -- IST local time of departure from source
+    scheduled_arrival   time,          -- IST local time of arrival at destination
+    run_days            text[],        -- DEPARTURE days at source: {tue,thu,fri,sun}
+    arrival_day_offset  integer not null default 0,  -- days from departure to arrival
+    updated_at          timestamptz not null default now()
 );
 
--- Already ran an earlier version of this file? These two are additive.
+-- Already ran an earlier version of this file? These are all additive.
 alter table trains add column if not exists run_days text[];
 alter table trains add column if not exists arrival_day_offset integer not null default 0;
+alter table trains add column if not exists source_code text;
+alter table trains add column if not exists scheduled_departure time;
 
 create table if not exists polls (
     id                        bigserial primary key,
@@ -81,13 +85,23 @@ where delay_minutes is not null
 group by train_number, name, to_char(journey_date, 'IYYY"-W"IW');
 
 -- All-time-so-far per train. Mirrors app/aggregate.py:train_summary.
-create or replace view train_summary
+--
+-- Dropped rather than replaced: CREATE OR REPLACE VIEW can only append
+-- columns, so inserting one mid-list reads as renaming a column and fails
+-- with 42P16. Nothing depends on this view, so dropping is safe.
+drop view if exists train_summary;
+create view train_summary
 with (security_invoker = on) as
 select
     t.train_number,
     t.name,
+    t.source_code,
     t.destination_code,
+    t.scheduled_departure,
     t.scheduled_arrival,
+    t.run_days,
+    t.arrival_day_offset,
+    t.updated_at,
     count(d.delay_minutes)                                  as journeys_observed,
     round(avg(d.delay_minutes)::numeric, 1)                 as avg_delay_minutes,
     case when count(d.delay_minutes) > 0
@@ -95,7 +109,9 @@ select
     end                                                     as on_time_pct
 from trains t
 left join daily_delays d using (train_number)
-group by t.train_number, t.name, t.destination_code, t.scheduled_arrival;
+group by t.train_number, t.name, t.source_code, t.destination_code,
+         t.scheduled_departure, t.scheduled_arrival, t.run_days,
+         t.arrival_day_offset, t.updated_at;
 
 -- ---------------------------------------------------------------------------
 -- Row Level Security

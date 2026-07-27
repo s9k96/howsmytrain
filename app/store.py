@@ -52,6 +52,8 @@ def upsert_train(
     scheduled_arrival: Optional[str] = None,
     run_days: Optional[list[str]] = None,
     arrival_day_offset: Optional[int] = None,
+    source_code: Optional[str] = None,
+    scheduled_departure: Optional[str] = None,
 ) -> None:
     if not enabled():
         db.upsert_train(train_number, name)
@@ -68,6 +70,10 @@ def upsert_train(
         row["run_days"] = run_days
     if arrival_day_offset is not None:
         row["arrival_day_offset"] = arrival_day_offset
+    if source_code:
+        row["source_code"] = source_code
+    if scheduled_departure:
+        row["scheduled_departure"] = scheduled_departure
 
     resp = httpx.post(
         _url("trains"),

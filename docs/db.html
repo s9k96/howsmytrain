@@ -19,17 +19,23 @@
 </style>
 </head>
 <body>
-  <div class="page">
-    <header class="top">
-      <div>
-        <h1>DB view — <code>polls</code></h1>
-        <div class="meta" id="summary">Loading…</div>
-      </div>
-      <div>
-        <a href="./local.html"><button>← Dashboard</button></a>
+  <div class="appbar">
+    <div class="appbar-inner">
+      <a class="brand" href="./index.html"><span class="mark">🚆</span>HowsMyTrain</a>
+      <nav class="nav">
+        <a href="./index.html">Fleet</a>
+        <a href="./db.html" aria-current="page">Raw data</a>
         <button id="theme-toggle">🌙 Dark</button>
-      </div>
-    </header>
+      </nav>
+    </div>
+  </div>
+
+  <div class="page">
+    <div class="page-head">
+      <div class="eyebrow">Every stored poll</div>
+      <h1>Raw data</h1>
+      <div class="meta" id="summary">Loading…</div>
+    </div>
 
     <div class="card">
       <div class="filters">
@@ -46,9 +52,16 @@
   </div>
 
 <script>
-async function fetchJSON(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
+// Reads Supabase directly, same as the other pages -- this used to hit the
+// local FastAPI /api routes, which meant the page was dead on GitHub Pages.
+const SUPABASE_URL = "https://frmcmbfiyvwtixvngqde.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_EIpHf86JIDEvUgSijFv4DQ_n9Qcjik0";
+
+async function sb(view, query) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${view}?${query}`, {
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+  });
+  if (!res.ok) throw new Error(`${view} -> HTTP ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
@@ -71,7 +84,7 @@ let names = {};
 function render(polls) {
   const container = document.getElementById("table-container");
   if (!polls.length) {
-    container.innerHTML = `<div class="empty-state">No rows. Run <code>python scripts/poll_once.py</code> first.</div>`;
+    container.innerHTML = `<div class="empty-state">No polls stored yet for this selection.</div>`;
     return;
   }
   const rows = polls.map(p => `
@@ -98,23 +111,24 @@ function render(polls) {
 async function load() {
   const train = document.getElementById("train-filter").value;
   const limit = document.getElementById("limit").value;
-  const qs = `?limit=${limit}` + (train ? `&train_number=${encodeURIComponent(train)}` : "");
+  const qs = `select=*&order=polled_at.desc&limit=${encodeURIComponent(limit)}`
+    + (train ? `&train_number=eq.${encodeURIComponent(train)}` : "");
   try {
-    const polls = await fetchJSON("/api/polls" + qs);
+    const polls = await sb("polls", qs);
     render(polls);
     const dates = new Set(polls.map(p => p.journey_date));
     document.getElementById("summary").textContent =
       `${polls.length} row${polls.length === 1 ? "" : "s"} · ${dates.size} journey date${dates.size === 1 ? "" : "s"} · loaded ${new Date().toLocaleTimeString()}`;
   } catch (err) {
     console.error(err);
-    document.getElementById("summary").textContent = "Failed to load — is the server running?";
+    document.getElementById("summary").textContent = "Failed to load: " + err.message;
   }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
   const sel = document.getElementById("train-filter");
   try {
-    const trains = await fetchJSON("/api/trains");
+    const trains = await sb("trains", "select=train_number,name&order=train_number");
     names = Object.fromEntries(trains.map(t => [t.train_number, t.name]));
     for (const t of trains) {
       const o = document.createElement("option");
@@ -128,11 +142,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("limit").addEventListener("change", load);
   document.getElementById("refresh").addEventListener("click", load);
 
-  let dark = false;
-  document.getElementById("theme-toggle").addEventListener("click", (e) => {
+  const toggle = document.getElementById("theme-toggle");
+  let dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
+  toggle.addEventListener("click", () => {
     dark = !dark;
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-    e.target.textContent = dark ? "☀️ Light" : "🌙 Dark";
+    toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
   });
 
   load();

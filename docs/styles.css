@@ -1,11 +1,15 @@
-/* HowsMyTrain -- starter dashboard styles.
+/* HowsMyTrain -- dashboard styles.
    Palette + roles follow the project's dataviz conventions: categorical hues
    in fixed order, text always in ink tokens (never series color), hairline
-   recessive gridlines. Edit freely -- this is a starting point. */
+   recessive gridlines.
+
+   Token names are load-bearing: the charts read --series-*, --gridline,
+   --surface-1 and --text-* at runtime via getComputedStyle. Rename with care. */
 
 :root {
   color-scheme: light;
   --surface-1: #fcfcfb;
+  --surface-2: #f4f4f1;          /* recessed: table headers, inset rows */
   --page-plane: #f9f9f7;
   --text-primary: #0b0b0b;
   --text-secondary: #52514e;
@@ -14,6 +18,8 @@
   --baseline: #c3c2b7;
   --border: rgba(11, 11, 11, 0.10);
   --success-text: #006300;
+  --shadow: 0 1px 2px rgba(11, 11, 11, 0.04), 0 4px 12px rgba(11, 11, 11, 0.03);
+  --hover-tint: rgba(11, 11, 11, 0.025);
 
   --series-1: #2a78d6; /* blue */
   --series-2: #eb6834; /* orange */
@@ -34,6 +40,7 @@
   :root:where(:not([data-theme="light"])) {
     color-scheme: dark;
     --surface-1: #1a1a19;
+    --surface-2: #222221;
     --page-plane: #0d0d0d;
     --text-primary: #ffffff;
     --text-secondary: #c3c2b7;
@@ -42,6 +49,8 @@
     --baseline: #383835;
     --border: rgba(255, 255, 255, 0.10);
     --success-text: #0ca30c;
+    --shadow: none;
+    --hover-tint: rgba(255, 255, 255, 0.035);
 
     --series-1: #3987e5;
     --series-2: #d95926;
@@ -56,6 +65,7 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --surface-1: #1a1a19;
+  --surface-2: #222221;
   --page-plane: #0d0d0d;
   --text-primary: #ffffff;
   --text-secondary: #c3c2b7;
@@ -64,6 +74,8 @@
   --baseline: #383835;
   --border: rgba(255, 255, 255, 0.10);
   --success-text: #0ca30c;
+  --shadow: none;
+  --hover-tint: rgba(255, 255, 255, 0.035);
 
   --series-1: #3987e5;
   --series-2: #d95926;
@@ -79,50 +91,90 @@
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Segoe UI Variable is Windows 11's refined UI face; SF Pro Text is macOS's.
+     Both are considerably better set than the generic system-ui fallback. */
+  font-family: "Segoe UI Variable Text", "SF Pro Text", system-ui, -apple-system,
+               "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
   background: var(--page-plane);
   color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .page {
-  max-width: 1080px;
+  max-width: 1140px;
   margin: 0 auto;
-  padding: 32px 20px 64px;
+  padding: clamp(20px, 4vw, 40px) clamp(16px, 3vw, 24px) 72px;
 }
+
+/* ---- Header -------------------------------------------------------------- */
 
 header.top {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 24px;
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
 
 header.top h1 {
-  font-size: 22px;
-  font-weight: 600;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.021em;   /* large text needs negative tracking to look set */
+  line-height: 1.2;
   margin: 0;
+  text-wrap: balance;
 }
 
-header.top .meta {
+header.top .meta,
+header.top .subtitle {
   color: var(--text-secondary);
   font-size: 13px;
+  margin-top: 6px;
+  letter-spacing: -0.003em;
 }
 
-#theme-toggle {
+/* ---- Buttons ------------------------------------------------------------- */
+
+button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
   border: 1px solid var(--border);
   background: var(--surface-1);
   color: var(--text-secondary);
   border-radius: 8px;
-  padding: 6px 12px;
-  font-size: 13px;
+  padding: 7px 13px;
   cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
 }
+
+button:hover {
+  background: var(--surface-2);
+  border-color: var(--baseline);
+  color: var(--text-primary);
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 2px;
+}
+
+header.top a,
+.card-actions a { text-decoration: none; }
+
+/* ---- Stat tiles ---------------------------------------------------------- */
 
 .kpi-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 12px;
   margin-bottom: 28px;
 }
@@ -130,74 +182,108 @@ header.top .meta {
 .stat-tile {
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px;
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: var(--shadow);
 }
 
 .stat-tile .label {
+  display: flex;
+  align-items: center;
   color: var(--text-secondary);
-  font-size: 13px;
-  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  margin-bottom: 10px;
+  letter-spacing: 0.002em;
 }
 
 .stat-tile .value {
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 600;
+  line-height: 1.05;
+  /* Proportional figures on display numbers -- tabular-nums makes a value like
+     121 read loose at this size (see dataviz anti-patterns). */
   font-variant-numeric: proportional-nums;
+  letter-spacing: -0.028em;
+}
+
+/* Unit recedes so the figure carries the tile. */
+.stat-tile .value .unit {
+  font-size: 0.45em;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0;
+  margin-left: 3px;
 }
 
 .stat-tile .sub {
-  margin-top: 4px;
+  margin-top: 8px;
   font-size: 12px;
+  line-height: 1.45;
   color: var(--text-muted);
 }
 
 .stat-tile .swatch {
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  flex: none;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  margin-right: 6px;
-  vertical-align: middle;
+  margin-right: 7px;
 }
+
+/* Tiles that navigate to a per-train view. */
+.tile-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+}
+
+.tile-link:hover {
+  border-color: var(--baseline);
+  transform: translateY(-2px);
+  box-shadow: 0 2px 4px rgba(11, 11, 11, 0.05), 0 8px 20px rgba(11, 11, 11, 0.05);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile-link, button { transition: none; }
+  .tile-link:hover { transform: none; }
+}
+
+/* ---- Cards --------------------------------------------------------------- */
 
 .card {
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 20px;
-  margin-bottom: 24px;
+  border-radius: 14px;
+  padding: 22px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow);
 }
 
 .card .card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 18px;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
 }
 
 .card h2 {
   font-size: 15px;
   font-weight: 600;
+  letter-spacing: -0.009em;
   margin: 0;
 }
 
-.card .card-actions button {
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: 8px;
-  padding: 5px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  margin-left: 6px;
-}
+.card .card-actions button { margin-left: 6px; }
 
-canvas#trend-chart {
-  width: 100%;
-}
+canvas { width: 100%; }
+
+/* ---- Tables -------------------------------------------------------------- */
 
 table {
   width: 100%;
@@ -206,46 +292,419 @@ table {
 }
 
 table.tabular {
+  /* Aligned digits are right here -- rows stack vertically. */
   font-variant-numeric: tabular-nums;
 }
 
 thead th {
   text-align: left;
   color: var(--text-muted);
-  font-weight: 500;
-  font-size: 12px;
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 1.4;               /* uppercase caps need room or they look clipped */
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
   border-bottom: 1px solid var(--gridline);
-  padding: 6px 8px;
+  padding: 4px 10px 10px;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 tbody td {
-  padding: 6px 8px;
+  padding: 9px 10px;
   border-bottom: 1px solid var(--gridline);
   color: var(--text-primary);
 }
 
+tbody tr { transition: background-color 0.1s ease; }
+tbody tr:hover { background: var(--hover-tint); }
 tbody tr:last-child td { border-bottom: none; }
 
-/* Tiles that navigate to a per-train view. Keeps stat-tile geometry; adds the
-   affordance and a visible keyboard focus ring. */
-.tile-link {
-  display: block;
-  text-decoration: none;
-  color: inherit;
-  transition: border-color 0.12s ease, transform 0.12s ease;
-}
-.tile-link:hover { border-color: var(--text-muted); transform: translateY(-1px); }
-.tile-link:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+/* ---- Status ink ---------------------------------------------------------- */
 
-.on-time { color: var(--status-good); }
-.late { color: var(--status-serious); }
-.very-late { color: var(--status-critical); }
+.on-time { color: var(--status-good); font-weight: 500; }
+.late { color: var(--status-serious); font-weight: 500; }
+.very-late { color: var(--status-critical); font-weight: 500; }
+
+/* Same three bands, applied to table cells and stat-tile figures. */
+.d-good, .stat-tile .value.good { color: var(--status-good); }
+.d-warn, .stat-tile .value.warn { color: var(--status-serious); }
+.d-bad,  .stat-tile .value.bad  { color: var(--status-critical); }
+.d-good, .d-warn, .d-bad { font-weight: 600; }
+
+/* ---- Misc ---------------------------------------------------------------- */
 
 .empty-state {
   color: var(--text-muted);
   font-size: 13px;
-  padding: 24px 0;
+  line-height: 1.55;
+  padding: 32px 16px;
   text-align: center;
+  text-wrap: pretty;
 }
 
+code {
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+a { color: var(--series-1); }
+
 .hidden { display: none; }
+
+/* =========================================================================
+   App shell
+   ========================================================================= */
+
+.appbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--page-plane) 82%, transparent);
+  backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.appbar-inner {
+  max-width: 1140px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 3vw, 24px);
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.017em;
+  color: var(--text-primary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.brand .mark {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--series-1);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.nav { display: flex; gap: 2px; margin-left: auto; align-items: center; }
+
+.nav a {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 6px 11px;
+  border-radius: 7px;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.nav a:hover { background: var(--surface-2); color: var(--text-primary); }
+.nav a[aria-current="page"] { color: var(--text-primary); background: var(--surface-2); }
+
+/* ---- Page title block ---------------------------------------------------- */
+
+.page-head { margin-bottom: 24px; }
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 7px;
+}
+
+.page-head h1 {
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.026em;
+  line-height: 1.15;
+  margin: 0;
+  text-wrap: balance;
+}
+
+.page-head .meta {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+/* ---- Hero stats ---------------------------------------------------------- */
+
+.hero {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1px;                        /* hairline dividers, not boxes */
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+.hero .stat { background: var(--surface-1); padding: 18px 20px; }
+
+.hero .stat .k {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.hero .stat .v {
+  font-size: 30px;
+  font-weight: 620;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: proportional-nums;
+}
+
+.hero .stat .v .unit {
+  font-size: 0.42em;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0;
+  margin-left: 3px;
+}
+
+.hero .stat .d { margin-top: 7px; font-size: 12px; color: var(--text-muted); }
+
+/* ---- Toolbar ------------------------------------------------------------- */
+
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+.toolbar input[type="search"] {
+  font: inherit;
+  font-size: 13px;
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--page-plane);
+  color: var(--text-primary);
+}
+
+.toolbar input[type="search"]:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+/* ---- Fleet list ---------------------------------------------------------- */
+
+.fleet { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+/* Deliberately NOT sticky: the wrapper needs overflow-x for narrow screens,
+   which makes it a scroll container on both axes, so a sticky thead offsets
+   itself *inside* the box and clips the first rows. */
+
+.fleet tbody tr { cursor: pointer; }
+
+.fleet td { vertical-align: middle; }
+
+.fleet .t-num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.fleet .t-name {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 1px;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet a { color: inherit; text-decoration: none; }
+.fleet tr:hover .t-num { color: var(--series-1); }
+
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---- Schedule columns ---------------------------------------------------- */
+
+.route, .timing { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.route { font-weight: 500; }
+.timing { color: var(--text-secondary); }
+
+.arrow { color: var(--text-muted); margin: 0 5px; font-weight: 400; }
+
+/* "+1" = arrives the next day. */
+.plus {
+  color: var(--series-2);
+  font-size: 9px;
+  font-weight: 700;
+  margin-left: 2px;
+  top: -0.5em;
+}
+
+/* Seven fixed day slots -- the shape of the week is scannable down the column
+   without reading any of it. */
+.days { display: inline-flex; gap: 2px; }
+
+.days i {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.days i.on {
+  background: color-mix(in srgb, var(--series-1) 16%, transparent);
+  color: var(--series-1);
+  opacity: 1;
+}
+
+/* Inline magnitude bar. Length carries the value; hue carries severity, which
+   is status (good/bad), not identity -- so status tokens are the correct
+   palette here rather than a categorical slot. */
+.bar-track {
+  position: relative;
+  height: 7px;
+  min-width: 64px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 4px;
+  background: var(--status-good);
+  transition: width 0.3s ease;
+}
+
+.bar-fill.warn { background: var(--status-serious); }
+.bar-fill.bad  { background: var(--status-critical); }
+.bar-fill.idle { background: var(--baseline); }
+
+/* ---- Pills --------------------------------------------------------------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.pill.good { color: var(--status-good); }
+.pill.warn { color: var(--status-serious); }
+.pill.bad  { color: var(--status-critical); }
+.pill.idle { color: var(--text-muted); background: transparent; border-color: var(--border); }
+
+/* ---- Accented hero figures ---------------------------------------------- */
+
+.hero .stat.accent { background: linear-gradient(var(--surface-1), var(--surface-1)) padding-box; }
+.hero .stat .v.good { color: var(--status-good); }
+.hero .stat .v.warn { color: var(--status-serious); }
+.hero .stat .v.bad  { color: var(--status-critical); }
+
+/* A hairline of colour at the top of each hero cell, in categorical order --
+   identity for the four measures, not magnitude. */
+.hero .stat { position: relative; }
+.hero .stat::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--accent, var(--series-1));
+}
+
+.dim { color: var(--text-muted); }
+
+/* ---- Waiting list (native disclosure, no JS) ----------------------------- */
+
+.waiting {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-1);
+  margin-bottom: 20px;
+  box-shadow: var(--shadow);
+}
+
+.waiting > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 16px 22px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-radius: 14px;
+}
+
+.waiting > summary::-webkit-details-marker { display: none; }
+
+.waiting > summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s ease;
+  flex: none;
+}
+
+.waiting[open] > summary::before { transform: rotate(90deg); }
+.waiting > summary:hover { color: var(--text-primary); }
+.waiting[open] > summary { border-bottom: 1px solid var(--border); border-radius: 14px 14px 0 0; }
+
+.waiting-body { padding: 4px 22px 20px; }
+
+.waiting-note {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  max-width: 68ch;
+  margin: 12px 0 14px;
+  text-wrap: pretty;
+}

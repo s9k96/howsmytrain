@@ -7,7 +7,6 @@
 <link rel="stylesheet" href="./styles.css">
 <script src="./vendor/chart.umd.min.js"></script>
 <style>
-  .subtitle { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
   .table-scroll { overflow-x: auto; }
   .note { color: var(--text-muted); font-size: 12px; margin-top: 10px; }
   /* Chart cards size to plot + axis band so labels never force a nested scroll. */
@@ -99,20 +98,36 @@ function median(xs) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+// Delay bands are status (good/bad), so they wear the status tokens.
+function band(m) {
+  if (m === null || m === undefined) return "";
+  if (m <= 10) return "good";
+  if (m <= 30) return "warn";
+  return "bad";
+}
+
 function renderKPIs(summary, delays) {
+  const avg = delays.length ? Math.round(summary.avg_delay_minutes ?? 0) : null;
+  const med = delays.length ? Math.round(median(delays)) : null;
+  const worst = delays.length ? Math.max(...delays) : null;
+  const pct = summary.on_time_pct ?? null;
+
   const tiles = [
-    ["Journeys observed", delays.length, ""],
-    ["Average delay", delays.length ? Math.round(summary.avg_delay_minutes ?? 0) : "–", "min"],
-    ["Median delay", delays.length ? Math.round(median(delays)) : "–", "min"],
-    ["Worst delay", delays.length ? Math.max(...delays) : "–", "min"],
-    ["On time", summary.on_time_pct === null || summary.on_time_pct === undefined ? "–" : summary.on_time_pct, "%"],
+    ["Journeys observed", delays.length, "", ""],
+    ["Average delay", avg, "min", band(avg)],
+    ["Median delay", med, "min", band(med)],
+    ["Worst delay", worst, "min", band(worst)],
+    ["On time", pct, "%", pct === null ? "" : (pct >= 70 ? "good" : pct >= 40 ? "warn" : "bad")],
   ];
-  document.getElementById("kpi-row").innerHTML = tiles.map(([label, value, unit]) => `
+  document.getElementById("kpi-row").innerHTML = tiles.map(([label, value, unit, tone]) => `
     <div class="stat-tile">
       <div class="label">${label}</div>
-      <div class="value">${value}${value === "–" ? "" : unit}</div>
+      <div class="value ${tone}">${value === null ? "–" : value}${value === null || !unit ? "" : `<span class="unit">${unit}</span>`}</div>
     </div>`).join("");
 }
+
+let trendChart = null;
+let distChart = null;
 
 // Single series -> one hue, no legend (the card title names it).
 function renderTrend(rows) {
@@ -129,7 +144,10 @@ function renderTrend(rows) {
   empty.classList.add("hidden");
   box.classList.remove("hidden");
 
-  new Chart(box.getContext("2d"), {
+  // Chart.js refuses a canvas that already hosts a chart -- must destroy on
+  // re-render (theme toggle calls main() again).
+  if (trendChart) trendChart.destroy();
+  trendChart = new Chart(box.getContext("2d"), {
     type: "line",
     data: {
       labels: rows.map(r => r.journey_date),
@@ -197,7 +215,8 @@ function renderDistribution(delays) {
   empty.classList.add("hidden");
   box.classList.remove("hidden");
 
-  new Chart(box.getContext("2d"), {
+  if (distChart) distChart.destroy();
+  distChart = new Chart(box.getContext("2d"), {
     type: "bar",
     data: {
       labels: BINS.map(b => b.label),
@@ -294,12 +313,14 @@ async function main() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  let dark = false;
-  document.getElementById("theme-toggle").addEventListener("click", (e) => {
+  const toggle = document.getElementById("theme-toggle");
+  let dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
+  toggle.addEventListener("click", () => {
     dark = !dark;
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-    e.target.textContent = dark ? "☀️ Light" : "🌙 Dark";
-    location.reload();  // simplest correct repaint: charts re-read CSS vars on load
+    toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
+    main();  // charts re-read CSS vars on re-render
   });
   main();
 });

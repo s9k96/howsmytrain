@@ -12,21 +12,31 @@
 <style>
   .banner {
     background: var(--surface-1); border: 1px solid var(--border);
-    border-radius: 8px; padding: 12px 14px; margin-bottom: 20px;
-    color: var(--text-secondary); font-size: 13px;
+    border-radius: 12px; padding: 14px 16px; margin-bottom: 20px;
+    color: var(--text-secondary); font-size: 13px; line-height: 1.55;
   }
   .table-scroll { overflow-x: auto; }
+  .chart-box { position: relative; height: 300px; }
 </style>
 </head>
 <body>
+  <div class="appbar">
+    <div class="appbar-inner">
+      <a class="brand" href="./index.html"><span class="mark">🚆</span>HowsMyTrain</a>
+      <nav class="nav">
+        <a href="./index.html" aria-current="page">Fleet</a>
+        <a href="./db.html">Raw data</a>
+        <button id="theme-toggle">🌙 Dark</button>
+      </nav>
+    </div>
+  </div>
+
   <div class="page">
-    <header class="top">
-      <div>
-        <h1>HowsMyTrain</h1>
-        <div class="meta" id="last-updated">Loading…</div>
-      </div>
-      <button id="theme-toggle">🌙 Dark</button>
-    </header>
+    <div class="page-head">
+      <div class="eyebrow">Indian Railways · punctuality tracker</div>
+      <h1>How late is my train?</h1>
+      <div class="meta" id="last-updated">Loading…</div>
+    </div>
 
     <div class="banner hidden" id="config-banner">
       <strong>Not configured yet.</strong> Set <code>SUPABASE_URL</code> and
@@ -35,19 +45,36 @@
       public by design and row-level security restricts it to read-only.
     </div>
 
-    <div class="kpi-row" id="kpi-row"></div>
+    <div class="hero" id="hero"></div>
 
     <div class="card">
-      <div class="card-head"><h2>Weekly average delay by train</h2></div>
-      <canvas id="trend-chart" height="90"></canvas>
+      <div class="card-head">
+        <h2>Tracked trains</h2>
+        <div class="toolbar">
+          <input type="search" id="filter" placeholder="Filter by number, name or destination…" aria-label="Filter trains">
+        </div>
+      </div>
+      <div class="table-scroll" id="fleet-container"></div>
+    </div>
+
+    <details class="waiting">
+      <summary id="waiting-summary">Awaiting first data</summary>
+      <div class="waiting-body">
+        <p class="waiting-note">
+          Tracked and scheduled, but no usable journey recorded yet. A train
+          only produces a row when it's polled while actually running — so
+          sparse services (some run one day a week) can sit here for days.
+        </p>
+        <div class="table-scroll" id="waiting-container"></div>
+      </div>
+    </details>
+
+    <div class="card">
+      <div class="card-head"><h2>Weekly average delay</h2></div>
+      <div class="chart-box"><canvas id="trend-chart"></canvas></div>
       <div class="empty-state hidden" id="trend-empty">
         Not enough data yet — the weekly view needs a few days of polling.
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-head"><h2>Daily final delay</h2></div>
-      <div class="table-scroll" id="daily-table-container"></div>
     </div>
   </div>
 
@@ -80,37 +107,167 @@ async function sb(view, query = "select=*") {
   return res.json();
 }
 
-function delayClass(m) {
-  if (m === null || m === undefined) return "";
-  if (m <= 10) return "on-time";
-  if (m <= 30) return "late";
-  return "very-late";
-}
-
-const fmt = (m) => (m === null || m === undefined ? "–" : `${m} min`);
-
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
   ));
 }
 
-function renderKPIs(trains) {
-  const row = document.getElementById("kpi-row");
+// Delay bands double as status: they mean good/bad, not identity.
+function band(m) {
+  if (m === null || m === undefined) return { cls: "idle", text: "No data" };
+  if (m <= 10) return { cls: "good", text: "On time" };
+  if (m <= 30) return { cls: "warn", text: "Slight delay" };
+  return { cls: "bad", text: "Late" };
+}
+
+let allTrains = [];      // train_summary rows that have at least one journey
+let waitingTrains = [];  // tracked but nothing recorded yet
+
+const WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const DAY_LABEL = { mon: "M", tue: "T", wed: "W", thu: "T", fri: "F", sat: "S", sun: "S" };
+
+// Seven fixed slots so the pattern is comparable down the column at a glance --
+// a list like "Tue, Thu, Fri" has to be read, this can be scanned.
+function runDaysDots(days) {
+  if (!days || !days.length) return '<span class="dim">unknown</span>';
+  const set = new Set(days);
+  const title = days.length === 7 ? "Daily" : days.join(", ");
+  return `<span class="days" title="${title}" aria-label="Runs ${title}">` +
+    WEEK.map(d => `<i class="${set.has(d) ? "on" : ""}">${DAY_LABEL[d]}</i>`).join("") +
+    `</span>`;
+}
+
+const hhmm = (t) => (t ? String(t).slice(0, 5) : "–");
+
+function routeText(t) {
+  if (!t.source_code && !t.destination_code) return '<span class="dim">–</span>';
+  return `${esc(t.source_code || "?")}<span class="arrow">→</span>${esc(t.destination_code || "?")}`;
+}
+
+function timingText(t) {
+  if (!t.scheduled_departure && !t.scheduled_arrival) return '<span class="dim">–</span>';
+  const plus = t.arrival_day_offset ? `<sup class="plus">+${t.arrival_day_offset}</sup>` : "";
+  return `${hhmm(t.scheduled_departure)}<span class="arrow">→</span>${hhmm(t.scheduled_arrival)}${plus}`;
+}
+
+function renderHero(trains) {
+  const withData = trains.filter(t => t.journeys_observed > 0);
+  const delays = withData.map(t => t.avg_delay_minutes).filter(v => v !== null);
+  const journeys = trains.reduce((a, t) => a + (t.journeys_observed || 0), 0);
+  const fleetAvg = delays.length ? Math.round(delays.reduce((a, b) => a + b, 0) / delays.length) : null;
+  const onTime = withData.filter(t => (t.avg_delay_minutes ?? 99) <= 10).length;
+
+  const onTimePct = withData.length ? Math.round(100 * onTime / withData.length) : null;
+
+  // Each hero cell gets a categorical hue in fixed order (identity of the
+  // measure), except the two that carry a judgement -- those wear status ink.
+  const stats = [
+    ["Trains tracked", trains.length, "", `${withData.length} with data so far`,
+      "--series-1", ""],
+    ["Journeys recorded", journeys, "", journeys ? "one per train per day" : "waiting on first poll",
+      "--series-7", ""],
+    ["Fleet average", fleetAvg === null ? "–" : fleetAvg, fleetAvg === null ? "" : "min",
+      "across trains with data", "--series-2", fleetAvg === null ? "" : band(fleetAvg).cls],
+    ["Running on time", onTimePct === null ? "–" : onTimePct, onTimePct === null ? "" : "%",
+      "average delay ≤ 10 min", "--series-3",
+      onTimePct === null ? "" : (onTimePct >= 70 ? "good" : onTimePct >= 40 ? "warn" : "bad")],
+  ];
+
+  document.getElementById("hero").innerHTML = stats.map(([k, v, unit, d, hue, tone]) => `
+    <div class="stat" style="--accent: var(${hue})">
+      <div class="k">${k}</div>
+      <div class="v ${tone}">${v}${unit ? `<span class="unit">${unit}</span>` : ""}</div>
+      <div class="d">${d}</div>
+    </div>`).join("");
+}
+
+function renderWaiting(trains) {
+  document.getElementById("waiting-summary").textContent =
+    `Awaiting first data — ${trains.length} train${trains.length === 1 ? "" : "s"}`;
+
+  const container = document.getElementById("waiting-container");
   if (!trains.length) {
-    row.innerHTML = `<div class="empty-state">No trains tracked yet.</div>`;
+    container.innerHTML = `<div class="empty-state">Every tracked train has recorded at least one journey.</div>`;
     return;
   }
-  row.innerHTML = trains.map((t, i) => `
-    <a class="stat-tile tile-link" href="./train.html?train=${encodeURIComponent(t.train_number)}">
-      <div class="label"><span class="swatch" style="background:${seriesColor(i)}"></span>${esc(t.train_number)}${t.name ? " · " + esc(t.name) : ""}</div>
-      <div class="value">${t.avg_delay_minutes === null ? "–" : t.avg_delay_minutes + "m"}</div>
-      <div class="sub">
-        ${t.journeys_observed} journey${t.journeys_observed === 1 ? "" : "s"} ·
-        ${t.on_time_pct === null ? "–" : t.on_time_pct + "%"} on-time
-        ${t.scheduled_arrival ? " · arrives " + esc(String(t.scheduled_arrival).slice(0, 5)) : ""}
-      </div>
-    </a>`).join("");
+  container.innerHTML = `
+    <table class="fleet tabular">
+      <thead><tr>
+        <th>Train</th><th>Route</th><th>Dep → Arr</th><th>Runs on</th><th>Last checked</th>
+      </tr></thead>
+      <tbody>${trains.map(t => {
+        const href = `./train.html?train=${encodeURIComponent(t.train_number)}`;
+        return `
+        <tr data-href="${href}">
+          <td>
+            <a href="${href}" class="t-num">${esc(t.train_number)}</a>
+            <span class="t-name">${esc(t.name || "—")}</span>
+          </td>
+          <td class="route">${routeText(t)}</td>
+          <td class="timing">${timingText(t)}</td>
+          <td>${runDaysDots(t.run_days)}</td>
+          <td class="dim">${t.updated_at ? new Date(t.updated_at).toLocaleDateString() : "never"}</td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>`;
+  wireRows(container);
+}
+
+// Whole row clickable for convenience; the train number stays a real link so
+// keyboard and middle-click still work.
+function wireRows(container) {
+  container.querySelectorAll("tr[data-href]").forEach(tr => {
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest("a")) return;
+      location.href = tr.dataset.href;
+    });
+  });
+}
+
+function renderFleet(trains) {
+  const container = document.getElementById("fleet-container");
+  if (!trains.length) {
+    container.innerHTML = `<div class="empty-state">${
+      allTrains.length
+        ? "No trains match that filter."
+        : "No journeys recorded yet — every tracked train is in the list below."
+    }</div>`;
+    return;
+  }
+  // Bar length is relative to the worst average in view, so the column stays
+  // readable whether the fleet runs 5 minutes or 5 hours late.
+  const worst = Math.max(10, ...trains.map(t => t.avg_delay_minutes || 0));
+
+  container.innerHTML = `
+    <table class="fleet tabular">
+      <thead><tr>
+        <th>Train</th><th>Route</th><th>Dep → Arr</th><th>Runs on</th>
+        <th class="num">Avg delay</th><th>Relative</th>
+        <th class="num">On time</th><th class="num">Days</th><th>Status</th>
+      </tr></thead>
+      <tbody>${trains.map(t => {
+        const b = band(t.avg_delay_minutes);
+        const pct = t.avg_delay_minutes ? Math.max(2, 100 * t.avg_delay_minutes / worst) : 0;
+        const href = `./train.html?train=${encodeURIComponent(t.train_number)}`;
+        return `
+        <tr data-href="${href}">
+          <td>
+            <a href="${href}" class="t-num">${esc(t.train_number)}</a>
+            <span class="t-name">${esc(t.name || "—")}</span>
+          </td>
+          <td class="route">${routeText(t)}</td>
+          <td class="timing">${timingText(t)}</td>
+          <td>${runDaysDots(t.run_days)}</td>
+          <td class="num ${t.avg_delay_minutes === null ? "" : "d-" + b.cls}">${t.avg_delay_minutes === null ? '<span class="dim">–</span>' : Math.round(t.avg_delay_minutes) + " min"}</td>
+          <td><div class="bar-track"><div class="bar-fill ${b.cls}" style="width:${pct}%"></div></div></td>
+          <td class="num">${t.on_time_pct === null ? '<span class="dim">–</span>' : t.on_time_pct + "%"}</td>
+          <td class="num">${t.journeys_observed}</td>
+          <td><span class="pill ${b.cls}">${b.text}</span></td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>`;
+  wireRows(container);
 }
 
 let chartInstance = null;
@@ -120,13 +277,17 @@ function renderTrend(weekly, trains) {
   const weeks = [...new Set(weekly.map(r => r.iso_week))].sort();
   if (!weeks.length) {
     document.getElementById("trend-empty").classList.remove("hidden");
-    canvas.classList.add("hidden");
+    canvas.parentElement.classList.add("hidden");
     return;
   }
   document.getElementById("trend-empty").classList.add("hidden");
-  canvas.classList.remove("hidden");
+  canvas.parentElement.classList.remove("hidden");
 
-  const datasets = trains.map((t, i) => {
+  // Only trains that actually have weekly data get a series -- 33 lines would
+  // exhaust the 8 categorical slots and read as noise.
+  const active = trains.filter(t => weekly.some(r => r.train_number === t.train_number)).slice(0, 8);
+
+  const datasets = active.map((t, i) => {
     const byWeek = Object.fromEntries(
       weekly.filter(r => r.train_number === t.train_number)
             .map(r => [r.iso_week, Number(r.avg_delay_minutes)])
@@ -136,10 +297,14 @@ function renderTrend(weekly, trains) {
       data: weeks.map(w => byWeek[w] ?? null),
       borderColor: seriesColor(i),
       backgroundColor: seriesColor(i),
-      borderWidth: 2, pointRadius: 4,
+      borderWidth: 2,
+      pointRadius: 4,
+      pointHoverRadius: 6,
       pointBackgroundColor: seriesColor(i),
-      pointBorderColor: cssVar("--surface-1"), pointBorderWidth: 2,
-      spanGaps: true, tension: 0.15,
+      pointBorderColor: cssVar("--surface-1"),
+      pointBorderWidth: 2,
+      spanGaps: true,
+      tension: 0.15,
     };
   });
 
@@ -149,9 +314,14 @@ function renderTrend(weekly, trains) {
     data: { labels: weeks, datasets },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       interaction: { mode: "nearest", intersect: false },
       plugins: {
-        legend: { position: "bottom", labels: { color: cssVar("--text-secondary"), boxWidth: 10, boxHeight: 10 } },
+        legend: {
+          display: datasets.length > 1,
+          position: "bottom",
+          labels: { color: cssVar("--text-secondary"), boxWidth: 10, boxHeight: 10, usePointStyle: true },
+        },
         tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.formattedValue} min avg delay` } },
       },
       scales: {
@@ -159,31 +329,20 @@ function renderTrend(weekly, trains) {
         y: {
           beginAtZero: true,
           title: { display: true, text: "Avg delay (minutes)", color: cssVar("--text-muted") },
-          grid: { color: cssVar("--gridline") }, ticks: { color: cssVar("--text-muted") },
+          grid: { color: cssVar("--gridline") },
+          ticks: { color: cssVar("--text-muted") },
         },
       },
     },
   });
 }
 
-function renderDaily(rows) {
-  const c = document.getElementById("daily-table-container");
-  if (!rows.length) {
-    c.innerHTML = `<div class="empty-state">No journeys recorded yet. The poller writes one row per train per day, near its arrival time.</div>`;
-    return;
-  }
-  c.innerHTML = `
-    <table class="tabular">
-      <thead><tr><th>Date</th><th>Train</th><th>Final delay</th><th>Status</th><th>Last seen at</th></tr></thead>
-      <tbody>${rows.map(r => `
-        <tr>
-          <td>${esc(r.journey_date)}</td>
-          <td>${esc(r.train_number)}${r.name ? " · " + esc(r.name) : ""}</td>
-          <td class="${delayClass(r.delay_minutes)}">${fmt(r.delay_minutes)}</td>
-          <td>${esc(r.status ?? "–")}</td>
-          <td>${esc(r.current_station_code ?? "–")}</td>
-        </tr>`).join("")}</tbody>
-    </table>`;
+function applyFilter() {
+  const q = document.getElementById("filter").value.trim().toLowerCase();
+  renderFleet(!q ? allTrains : allTrains.filter(t =>
+    [t.train_number, t.name, t.source_code, t.destination_code]
+      .some(v => String(v ?? "").toLowerCase().includes(q))
+  ));
 }
 
 async function main() {
@@ -193,42 +352,48 @@ async function main() {
     return;
   }
   try {
-    const [trains, weekly, daily] = await Promise.all([
+    const [summary, weekly] = await Promise.all([
       sb("train_summary", "select=*&order=train_number"),
       sb("weekly_stats", "select=*&order=iso_week"),
-      sb("daily_delays", "select=*&order=journey_date.desc,train_number&limit=200"),
     ]);
-    // KPIs and the table first, and the chart isolated: a chart failure
-    // (missing Chart.js, canvas issue) must not blank out data that loaded fine.
-    renderKPIs(trains);
-    renderDaily(daily);
+
+    allTrains = summary.filter(t => t.journeys_observed > 0);
+    waitingTrains = summary.filter(t => !t.journeys_observed);
+
+    renderHero(summary);
+    applyFilter();
+    renderWaiting(waitingTrains);
     try {
-      renderTrend(weekly, trains);
+      renderTrend(weekly, allTrains);
     } catch (chartErr) {
       console.error(chartErr);
-      document.getElementById("trend-empty").textContent =
-        "Chart unavailable: " + chartErr.message;
-      document.getElementById("trend-empty").classList.remove("hidden");
-      document.getElementById("trend-chart").classList.add("hidden");
+      const el = document.getElementById("trend-empty");
+      el.textContent = "Chart unavailable: " + chartErr.message;
+      el.classList.remove("hidden");
     }
     document.getElementById("last-updated").textContent =
-      `${daily.length} journey${daily.length === 1 ? "" : "s"} recorded · loaded ${new Date().toLocaleTimeString()}`;
+      `${allTrains.length} of ${summary.length} trains reporting · updated ${new Date().toLocaleTimeString()}`;
   } catch (err) {
     console.error(err);
-    // Show the real reason (status + PostgREST body) rather than a generic
-    // string -- a 401 vs 404 vs network failure need completely different fixes.
     document.getElementById("last-updated").textContent = "Failed to load: " + err.message;
   }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  let dark = false;
-  document.getElementById("theme-toggle").addEventListener("click", (e) => {
+  document.getElementById("filter").addEventListener("input", applyFilter);
+
+  // Seed from the OS preference, else the first click is a no-op for anyone
+  // already in dark mode.
+  const toggle = document.getElementById("theme-toggle");
+  let dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
+  toggle.addEventListener("click", () => {
     dark = !dark;
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-    e.target.textContent = dark ? "☀️ Light" : "🌙 Dark";
+    toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
     main();
   });
+
   main();
 });
 </script>

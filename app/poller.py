@@ -85,6 +85,26 @@ def _extract_arrival_offset(data: dict) -> int:
         return 0
 
 
+def _time_of(ts: Optional[str]) -> Optional[str]:
+    """'2026-07-26T14:05:00+05:30' -> '14:05:00'."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts).strftime("%H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _extract_origin(data: dict) -> tuple[Optional[str], Optional[str]]:
+    """(source_code, scheduled_departure) from the first stop on the route."""
+    code = ((data.get("train") or {}).get("source") or {}).get("code")
+    route = data.get("route") or []
+    departure = _time_of(_first(route[0], "scheduledDeparture") if route else None)
+    if not code and route:
+        code = _first(route[0], "stationCode", "code")
+    return code, departure
+
+
 def _extract_destination(data: dict) -> tuple[Optional[str], Optional[str]]:
     """
     (destination_code, scheduled_arrival_time) from the last stop on the route.
@@ -98,14 +118,7 @@ def _extract_destination(data: dict) -> tuple[Optional[str], Optional[str]]:
         return None, None
     last = route[-1]
     code = _first(last, "stationCode", "code")
-    ts = _first(last, "scheduledArrival", "scheduledDeparture")
-    if not ts:
-        return code, None
-    try:
-        # "2026-07-26T22:25:00+05:30" -> "22:25:00"
-        return code, datetime.fromisoformat(ts).strftime("%H:%M:%S")
-    except ValueError:
-        return code, None
+    return code, _time_of(_first(last, "scheduledArrival", "scheduledDeparture"))
 
 
 def poll_train(client: RailRadarClient, train_number: str) -> bool:
@@ -129,11 +142,14 @@ def poll_train(client: RailRadarClient, train_number: str) -> bool:
     station_code, loc_status = _extract_current_location(data)
     last_updated_at = _extract_last_updated_at(data)
     dest_code, sched_arrival = _extract_destination(data)
+    src_code, sched_departure = _extract_origin(data)
 
     store.upsert_train(
         train_number, name, dest_code, sched_arrival,
         run_days=_extract_run_days(data),
         arrival_day_offset=_extract_arrival_offset(data),
+        source_code=src_code,
+        scheduled_departure=sched_departure,
     )
     store.insert_poll(
         train_number=train_number,
