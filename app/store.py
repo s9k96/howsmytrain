@@ -127,6 +127,32 @@ def insert_poll(
     _check(resp, "insert_poll")
 
 
+def record_run(due_count: int, ok_count: int, failed_count: int) -> None:
+    """
+    Heartbeat for one workflow execution -- written even when nothing was due.
+
+    Best-effort: a failed heartbeat must never fail the run that collected
+    real data, so this logs and swallows.
+    """
+    if not enabled():
+        return
+    try:
+        resp = httpx.post(
+            _url("poller_runs"),
+            headers=_headers(),
+            json=[{
+                "ran_at": db.now_ist_iso(),
+                "due_count": due_count,
+                "ok_count": ok_count,
+                "failed_count": failed_count,
+            }],
+            timeout=TIMEOUT,
+        )
+        _check(resp, "record_run")
+    except Exception as exc:  # noqa: BLE001 -- heartbeat is never worth failing on
+        logger.warning("Could not record poller run: %s", exc)
+
+
 def list_trains() -> list[dict]:
     """Tracked trains with their learned destination/arrival time."""
     if not enabled():

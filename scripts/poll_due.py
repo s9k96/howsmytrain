@@ -105,16 +105,22 @@ def main() -> int:
             already,
         )
 
+    if args.dry_run:
+        logging.info("Would poll (%s): %s", now.strftime("%H:%M IST"), ", ".join(due) or "nothing")
+        return 0
+
     if not due:
+        # Still record the heartbeat: a run that finds nothing due is the
+        # normal case, and it's what distinguishes a healthy quiet period
+        # from a dead scheduler.
+        store.record_run(0, 0, 0)
         logging.info("Nothing due at %s IST. Exiting without any API calls.", now.strftime("%H:%M"))
         return 0
 
     logging.info("Due now (%s): %s", now.strftime("%H:%M IST"), ", ".join(due))
-    if args.dry_run:
-        return 0
-
     config.require_api_key()
     results = poll_all(due)
+    store.record_run(len(due), len(results["ok"]), len(results["failed"]))
     logging.info("Done. ok=%s failed=%s", results["ok"], results["failed"])
     return 0 if not results["failed"] else 1
 

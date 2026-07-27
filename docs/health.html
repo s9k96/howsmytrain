@@ -68,7 +68,7 @@ function coverageBar(actual, expected) {
     </div>`;
 }
 
-function render(trains, polls, now) {
+function render(trains, polls, runs, now) {
   const byDate = {};
   for (const p of polls) (byDate[p.journey_date] ||= new Set()).add(p.train_number);
 
@@ -96,18 +96,25 @@ function render(trains, polls, now) {
   const lastPoll = polls.length
     ? new Date(Math.max(...polls.map(p => new Date(p.polled_at))))
     : null;
-  const hoursSince = lastPoll ? (now - lastPoll) / 36e5 : null;
-  const staleTone = hoursSince === null ? "bad" : hoursSince < 26 ? "good" : hoursSince < 48 ? "warn" : "bad";
   const covPct = totExp ? Math.round(100 * totAct / totExp) : null;
 
+  // The heartbeat, not the last poll, is what says the scheduler is alive:
+  // most runs correctly find nothing due and write no poll rows.
+  const lastRun = runs.length ? new Date(Math.max(...runs.map(r => new Date(r.ran_at)))) : null;
+  const minsSinceRun = lastRun ? (now - lastRun) / 6e4 : null;
+  const runTone = minsSinceRun === null ? "idle"
+    : minsSinceRun < 45 ? "good" : minsSinceRun < 120 ? "warn" : "bad";
+  const runsToday = runs.filter(r => isoDate(new Date(r.ran_at)) === today).length;
+
   document.getElementById("hero").innerHTML = [
-    ["Last poll", lastPoll ? `${Math.round(hoursSince)}` : "–", lastPoll ? "h ago" : "",
-      lastPoll ? lastPoll.toLocaleString() : "nothing recorded", "--series-1", staleTone],
+    ["Scheduler", lastRun ? Math.round(minsSinceRun) : "–", lastRun ? "min ago" : "",
+      lastRun ? `${runsToday} runs today · expects one every 30 min`
+              : "no heartbeat yet — deploy the updated poller", "--series-1", runTone],
     ["Coverage", covPct === null ? "–" : covPct, covPct === null ? "" : "%",
       `${totAct} of ${totExp} expected polls`, "--series-3",
       covPct === null ? "" : covPct >= 95 ? "good" : covPct >= 70 ? "warn" : "bad"],
-    ["Today", `${(byDate[today] || new Set()).size}`, "",
-      `${rows[0].expected} expected so far today`, "--series-7", ""],
+    ["Last train polled", lastPoll ? `${Math.round((now - lastPoll) / 36e5)}` : "–", lastPoll ? "h ago" : "",
+      lastPoll ? "gaps here are normal between arrivals" : "nothing recorded", "--series-7", ""],
     ["Trains tracked", trains.length, "",
       `${trains.filter(t => !t.run_days).length} schedules still unknown`, "--series-2", ""],
   ].map(([k, v, unit, d, hue, tone]) => `
@@ -180,11 +187,15 @@ async function main() {
   try {
     const since = new Date();
     since.setDate(since.getDate() - DAYS_BACK);
-    const [trains, polls] = await Promise.all([
+    const [trains, polls, runs] = await Promise.all([
       sb("train_summary", "select=*&order=train_number"),
       sb("polls", `select=train_number,journey_date,polled_at&journey_date=gte.${isoDate(since)}&limit=5000`),
+      // poller_runs may not exist yet on an un-migrated project -- the page
+      // still works without it, just without the heartbeat.
+      sb("poller_runs", `select=ran_at,due_count,ok_count,failed_count&ran_at=gte.${isoDate(since)}&limit=5000`)
+        .catch(() => []),
     ]);
-    render(trains, polls, new Date());
+    render(trains, polls, runs, new Date());
   } catch (err) {
     console.error(err);
     document.getElementById("subtitle").textContent = "Failed to load: " + err.message;

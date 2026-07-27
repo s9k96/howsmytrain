@@ -42,6 +42,22 @@ create table if not exists polls (
 create index if not exists idx_polls_train_date on polls (train_number, journey_date);
 create index if not exists idx_polls_polled_at  on polls (polled_at desc);
 
+-- Heartbeat: one row per workflow execution, including the ~90% of runs that
+-- find nothing due and call the API zero times.
+--
+-- Without this, "is the pipeline alive?" is unanswerable: a gap in `polls`
+-- means either the cron died or simply that no train was scheduled to arrive,
+-- and those need very different reactions. Cheap at ~48 rows/day.
+create table if not exists poller_runs (
+    id          bigserial primary key,
+    ran_at      timestamptz not null default now(),
+    due_count   integer not null default 0,
+    ok_count    integer not null default 0,
+    failed_count integer not null default 0
+);
+
+create index if not exists idx_poller_runs_ran_at on poller_runs (ran_at desc);
+
 -- One row per (train, journey_date): the LAST poll of that journey, i.e. our
 -- best estimate of how late the train ultimately was. Postgres DISTINCT ON
 -- replaces the self-join the SQLite version needs.
@@ -121,11 +137,15 @@ group by t.train_number, t.name, t.source_code, t.destination_code,
 -- through the poller using the service_role key (kept in GitHub Actions
 -- secrets), which bypasses RLS.
 -- ---------------------------------------------------------------------------
-alter table trains enable row level security;
-alter table polls  enable row level security;
+alter table trains       enable row level security;
+alter table polls        enable row level security;
+alter table poller_runs  enable row level security;
 
 drop policy if exists "anon reads trains" on trains;
 create policy "anon reads trains" on trains for select to anon using (true);
 
 drop policy if exists "anon reads polls" on polls;
 create policy "anon reads polls" on polls for select to anon using (true);
+
+drop policy if exists "anon reads poller_runs" on poller_runs;
+create policy "anon reads poller_runs" on poller_runs for select to anon using (true);
