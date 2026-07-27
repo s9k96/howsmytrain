@@ -7,7 +7,11 @@ name: Poll train delays
 # due-window plus frequent cheap checks tolerates both.
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every 30 min UTC; poll_due.py works in IST
+    # Every 30 min, deliberately NOT on :00/:30. GitHub's scheduler is
+    # best-effort and those two minutes are the most contended on the
+    # platform -- runs there get delayed 10-40 min or dropped outright.
+    # Odd offsets are noticeably more punctual.
+    - cron: "7,37 * * * *"
   workflow_dispatch:
     inputs:
       all:
