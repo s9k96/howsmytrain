@@ -102,7 +102,7 @@ function renderKPIs(trains) {
     return;
   }
   row.innerHTML = trains.map((t, i) => `
-    <div class="stat-tile">
+    <a class="stat-tile tile-link" href="./train.html?train=${encodeURIComponent(t.train_number)}">
       <div class="label"><span class="swatch" style="background:${seriesColor(i)}"></span>${esc(t.train_number)}${t.name ? " · " + esc(t.name) : ""}</div>
       <div class="value">${t.avg_delay_minutes === null ? "–" : t.avg_delay_minutes + "m"}</div>
       <div class="sub">
@@ -110,7 +110,7 @@ function renderKPIs(trains) {
         ${t.on_time_pct === null ? "–" : t.on_time_pct + "%"} on-time
         ${t.scheduled_arrival ? " · arrives " + esc(String(t.scheduled_arrival).slice(0, 5)) : ""}
       </div>
-    </div>`).join("");
+    </a>`).join("");
 }
 
 let chartInstance = null;

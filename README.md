@@ -163,6 +163,11 @@ charts stay visually consistent.
 pytest
 ```
 
+## Known trade-offs
+
+Deferred work and deliberate simplifications are tracked in [TODO.md](TODO.md),
+each with the trigger that makes it worth doing.
+
 ## Notes & limitations
 
 - RailRadar is a third-party service (not official Indian Railways), free

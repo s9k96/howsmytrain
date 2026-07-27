@@ -14,8 +14,14 @@ create table if not exists trains (
     name               text,
     destination_code   text,
     scheduled_arrival  time,          -- IST local time of arrival at destination
+    run_days           text[],        -- DEPARTURE days at source: {tue,thu,fri,sun}
+    arrival_day_offset integer not null default 0,  -- days from departure to arrival
     updated_at         timestamptz not null default now()
 );
+
+-- Already ran an earlier version of this file? These two are additive.
+alter table trains add column if not exists run_days text[];
+alter table trains add column if not exists arrival_day_offset integer not null default 0;
 
 create table if not exists polls (
     id                        bigserial primary key,

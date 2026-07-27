@@ -226,6 +226,17 @@ tbody td {
 
 tbody tr:last-child td { border-bottom: none; }
 
+/* Tiles that navigate to a per-train view. Keeps stat-tile geometry; adds the
+   affordance and a visible keyboard focus ring. */
+.tile-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.tile-link:hover { border-color: var(--text-muted); transform: translateY(-1px); }
+.tile-link:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+
 .on-time { color: var(--status-good); }
 .late { color: var(--status-serious); }
 .very-late { color: var(--status-critical); }

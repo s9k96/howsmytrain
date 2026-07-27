@@ -10,6 +10,7 @@ being picked up, check `raw_json` in the `polls` table and adjust the
 `_extract_*` helpers below.
 """
 import logging
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -51,6 +52,37 @@ def _extract_current_location(data: dict) -> tuple[Optional[str], Optional[str]]
 
 def _extract_last_updated_at(data: dict) -> Optional[str]:
     return _first(data, "lastUpdatedAt", "updatedAt")
+
+
+def _extract_run_days(data: dict) -> Optional[list[str]]:
+    """
+    Days the train DEPARTS its source, e.g. ['tue','thu','fri','sun'].
+
+    Many trains -- specials especially -- run once or twice a week. Polling
+    them daily spends a request per day for data that exists on one.
+    """
+    days = (data.get("train") or {}).get("runDays")
+    if not days:
+        return None
+    return [str(d).strip().lower()[:3] for d in days]
+
+
+def _extract_arrival_offset(data: dict) -> int:
+    """
+    Whole days between departure and arrival at the destination.
+
+    RailRadar reports the last stop's `arrivalDay` as 1-based (day1 = same
+    day as departure), so a train leaving Thursday and arriving Friday has
+    arrivalDay=2 -> offset 1. runDays are departure days but we poll at
+    arrival, so this offset is what maps one onto the other.
+    """
+    route = data.get("route") or []
+    if not route:
+        return 0
+    try:
+        return max(0, int(route[-1].get("arrivalDay", 1)) - 1)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _extract_destination(data: dict) -> tuple[Optional[str], Optional[str]]:
@@ -98,7 +130,11 @@ def poll_train(client: RailRadarClient, train_number: str) -> bool:
     last_updated_at = _extract_last_updated_at(data)
     dest_code, sched_arrival = _extract_destination(data)
 
-    store.upsert_train(train_number, name, dest_code, sched_arrival)
+    store.upsert_train(
+        train_number, name, dest_code, sched_arrival,
+        run_days=_extract_run_days(data),
+        arrival_day_offset=_extract_arrival_offset(data),
+    )
     store.insert_poll(
         train_number=train_number,
         status=status,
@@ -115,11 +151,22 @@ def poll_train(client: RailRadarClient, train_number: str) -> bool:
     return True
 
 
+# RailRadar's free tier allows 10 requests/minute. Arrival times cluster hard
+# (most long-distance trains reach Delhi in the morning), so a single run can
+# have a dozen trains due at once and would otherwise fire them back-to-back
+# and start collecting 429s.
+# ponytail: fixed delay, not a token bucket -- swap if the burst cap changes
+# or a run ever needs to poll more than ~40 trains.
+SECONDS_BETWEEN_CALLS = 7.0
+
+
 def poll_all(train_numbers: list[str]) -> dict:
     """Poll every configured train once. Returns a summary dict."""
     client = RailRadarClient()
     results = {"ok": [], "failed": []}
-    for train_number in train_numbers:
+    for i, train_number in enumerate(train_numbers):
+        if i:  # no delay before the first call -- the common case is 1-2 trains
+            time.sleep(SECONDS_BETWEEN_CALLS)
         ok = poll_train(client, train_number)
         (results["ok"] if ok else results["failed"]).append(train_number)
     return results

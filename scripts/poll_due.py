@@ -41,6 +41,26 @@ logging.basicConfig(
 )
 
 
+DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]  # matches datetime.weekday()
+
+
+def _runs_today(train: dict, now: datetime) -> bool:
+    """
+    Is this train mid-journey right now, given the days it departs its source?
+
+    run_days are DEPARTURE days, but we poll near arrival -- so for a train
+    that arrives the day after it departs (arrival_day_offset=1), a Friday
+    arrival belongs to a Thursday departure. Unknown run_days means poll: the
+    response is what teaches us them.
+    """
+    run_days = train.get("run_days")
+    if not run_days:
+        return True
+    offset = train.get("arrival_day_offset") or 0
+    departure_day = (now - timedelta(days=offset)).weekday()
+    return DAYS[departure_day] in run_days
+
+
 def _due_now(trains: list[dict], now: datetime, already_polled: set[str]) -> list[str]:
     """Train numbers whose scheduled arrival falls in the window around now."""
     due = []
@@ -48,6 +68,8 @@ def _due_now(trains: list[dict], now: datetime, already_polled: set[str]) -> lis
         number = t["train_number"]
         if number in already_polled:
             continue  # one reading per journey_date is all the daily stat needs
+        if not _runs_today(t, now):
+            continue  # doesn't run today -- polling returns the next run, not this one
         arrival = t.get("scheduled_arrival")
         if not arrival:
             due.append(number)  # unknown schedule -> poll once to learn it

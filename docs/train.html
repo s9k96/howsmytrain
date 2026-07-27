@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Train · HowsMyTrain</title>
+<link rel="stylesheet" href="./styles.css">
+<script src="./vendor/chart.umd.min.js"></script>
+<style>
+  .subtitle { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
+  .table-scroll { overflow-x: auto; }
+  .note { color: var(--text-muted); font-size: 12px; margin-top: 10px; }
+  /* Chart cards size to plot + axis band so labels never force a nested scroll. */
+  .chart-box { position: relative; height: 300px; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <header class="top">
+      <div>
+        <h1 id="train-title">Loading…</h1>
+        <div class="subtitle" id="train-subtitle"></div>
+      </div>
+      <div>
+        <a href="./index.html"><button>← All trains</button></a>
+        <button id="theme-toggle">🌙 Dark</button>
+      </div>
+    </header>
+
+    <div class="kpi-row" id="kpi-row"></div>
+
+    <div class="card">
+      <div class="card-head"><h2>Final delay by day</h2></div>
+      <div class="chart-box"><canvas id="trend-chart"></canvas></div>
+      <div class="empty-state hidden" id="trend-empty"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Delay distribution</h2></div>
+      <div class="chart-box"><canvas id="dist-chart"></canvas></div>
+      <div class="empty-state hidden" id="dist-empty"></div>
+      <div id="dist-table"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Every recorded journey</h2></div>
+      <div class="table-scroll" id="daily-table"></div>
+    </div>
+  </div>
+
+<script>
+const SUPABASE_URL = "https://frmcmbfiyvwtixvngqde.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_EIpHf86JIDEvUgSijFv4DQ_n9Qcjik0";
+
+// A histogram needs enough observations to have a shape; below this it is just
+// a bar per day dressed up as a distribution (see dataviz anti-patterns:
+// "a one-bar bar chart"). The daily table carries the data until then.
+const MIN_FOR_DISTRIBUTION = 5;
+
+// Ordered bins, not nominal categories: they run best -> worst. Thresholds
+// match ON_TIME_THRESHOLD_MINUTES (10) in app/aggregate.py and the
+// delayClass() buckets used across the other dashboards.
+const BINS = [
+  { label: "On time (≤10m)", test: (d) => d <= 10 },
+  { label: "11–30m",         test: (d) => d > 10 && d <= 30 },
+  { label: "31–60m",         test: (d) => d > 30 && d <= 60 },
+  { label: "61–120m",        test: (d) => d > 60 && d <= 120 },
+  { label: "Over 2h",        test: (d) => d > 120 },
+];
+
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = (m) => (m === null || m === undefined ? "–" : `${m} min`);
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function delayClass(m) {
+  if (m === null || m === undefined) return "";
+  if (m <= 10) return "on-time";
+  if (m <= 30) return "late";
+  return "very-late";
+}
+
+async function sb(view, query) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${view}?${query}`, {
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+  });
+  if (!res.ok) throw new Error(`${view} -> HTTP ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+function median(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function renderKPIs(summary, delays) {
+  const tiles = [
+    ["Journeys observed", delays.length, ""],
+    ["Average delay", delays.length ? Math.round(summary.avg_delay_minutes ?? 0) : "–", "min"],
+    ["Median delay", delays.length ? Math.round(median(delays)) : "–", "min"],
+    ["Worst delay", delays.length ? Math.max(...delays) : "–", "min"],
+    ["On time", summary.on_time_pct === null || summary.on_time_pct === undefined ? "–" : summary.on_time_pct, "%"],
+  ];
+  document.getElementById("kpi-row").innerHTML = tiles.map(([label, value, unit]) => `
+    <div class="stat-tile">
+      <div class="label">${label}</div>
+      <div class="value">${value}${value === "–" ? "" : unit}</div>
+    </div>`).join("");
+}
+
+// Single series -> one hue, no legend (the card title names it).
+function renderTrend(rows) {
+  const box = document.getElementById("trend-chart");
+  const empty = document.getElementById("trend-empty");
+  if (rows.length < 2) {
+    empty.textContent = rows.length
+      ? "Only one journey recorded so far — a trend needs at least two days."
+      : "No journeys recorded yet.";
+    empty.classList.remove("hidden");
+    box.classList.add("hidden");
+    return;
+  }
+  empty.classList.add("hidden");
+  box.classList.remove("hidden");
+
+  new Chart(box.getContext("2d"), {
+    type: "line",
+    data: {
+      labels: rows.map(r => r.journey_date),
+      datasets: [{
+        label: "Final delay",
+        data: rows.map(r => r.delay_minutes),
+        borderColor: cssVar("--series-1"),
+        backgroundColor: cssVar("--series-1"),
+        borderWidth: 2,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        pointBackgroundColor: cssVar("--series-1"),
+        pointBorderColor: cssVar("--surface-1"),
+        pointBorderWidth: 2,
+        tension: 0.15,
+        spanGaps: true,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (c) => `${c.formattedValue} min late` } },
+      },
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { grid: { color: cssVar("--gridline") }, ticks: { color: cssVar("--text-muted") } },
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: "Delay (minutes)", color: cssVar("--text-muted") },
+          grid: { color: cssVar("--gridline") },
+          ticks: { color: cssVar("--text-muted") },
+        },
+      },
+    },
+  });
+}
+
+function renderDistribution(delays) {
+  const box = document.getElementById("dist-chart");
+  const empty = document.getElementById("dist-empty");
+  const counts = BINS.map(b => delays.filter(b.test).length);
+
+  // Table twin renders regardless -- it is the accessible equivalent and the
+  // only readable form while n is small.
+  document.getElementById("dist-table").innerHTML = `
+    <table class="tabular">
+      <thead><tr><th>Delay range</th><th>Journeys</th><th>Share</th></tr></thead>
+      <tbody>${BINS.map((b, i) => `
+        <tr>
+          <td>${b.label}</td>
+          <td>${counts[i]}</td>
+          <td>${delays.length ? Math.round(100 * counts[i] / delays.length) + "%" : "–"}</td>
+        </tr>`).join("")}</tbody>
+    </table>`;
+
+  if (delays.length < MIN_FOR_DISTRIBUTION) {
+    empty.textContent =
+      `${delays.length} journey${delays.length === 1 ? "" : "s"} recorded — a distribution needs at least ${MIN_FOR_DISTRIBUTION} to mean anything. Counts are in the table below.`;
+    empty.classList.remove("hidden");
+    box.classList.add("hidden");
+    return;
+  }
+  empty.classList.add("hidden");
+  box.classList.remove("hidden");
+
+  new Chart(box.getContext("2d"), {
+    type: "bar",
+    data: {
+      labels: BINS.map(b => b.label),
+      datasets: [{
+        label: "Journeys",
+        data: counts,
+        backgroundColor: cssVar("--series-1"),
+        borderRadius: 4,          // rounded data-end, anchored to baseline
+        borderSkipped: "bottom",
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (c) => `${c.raw} of ${delays.length} journeys (${Math.round(100 * c.raw / delays.length)}%)`,
+          },
+        },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: cssVar("--text-muted") } },
+        y: {
+          beginAtZero: true,
+          ticks: { color: cssVar("--text-muted"), precision: 0 },
+          title: { display: true, text: "Journeys", color: cssVar("--text-muted") },
+          grid: { color: cssVar("--gridline") },
+        },
+      },
+    },
+  });
+}
+
+function renderDaily(rows) {
+  const c = document.getElementById("daily-table");
+  if (!rows.length) {
+    c.innerHTML = `<div class="empty-state">Nothing recorded yet. The poller stores one row per day, near this train's arrival time.</div>`;
+    return;
+  }
+  c.innerHTML = `
+    <table class="tabular">
+      <thead><tr><th>Date</th><th>Final delay</th><th>Status</th><th>Last seen</th><th>Polled at</th></tr></thead>
+      <tbody>${[...rows].reverse().map(r => `
+        <tr>
+          <td>${esc(r.journey_date)}</td>
+          <td class="${delayClass(r.delay_minutes)}">${fmt(r.delay_minutes)}</td>
+          <td>${esc(r.status ?? "–")}</td>
+          <td>${esc(r.current_station_code ?? "–")}</td>
+          <td>${r.polled_at ? new Date(r.polled_at).toLocaleString() : "–"}</td>
+        </tr>`).join("")}</tbody>
+    </table>`;
+}
+
+async function main() {
+  const train = new URLSearchParams(location.search).get("train");
+  if (!train) {
+    document.getElementById("train-title").textContent = "No train selected";
+    document.getElementById("train-subtitle").innerHTML =
+      `Pick one from the <a href="./index.html">dashboard</a>.`;
+    return;
+  }
+  try {
+    const [summaryRows, daily] = await Promise.all([
+      sb("train_summary", `select=*&train_number=eq.${encodeURIComponent(train)}`),
+      sb("daily_delays", `select=*&train_number=eq.${encodeURIComponent(train)}&order=journey_date`),
+    ]);
+    const summary = summaryRows[0] || { train_number: train };
+    const delays = daily.map(r => r.delay_minutes).filter(d => d !== null && d !== undefined);
+
+    document.title = `${train} · HowsMyTrain`;
+    document.getElementById("train-title").textContent =
+      summary.name ? `${train} · ${summary.name}` : train;
+    document.getElementById("train-subtitle").textContent = [
+      summary.destination_code ? `Terminates ${summary.destination_code}` : null,
+      summary.scheduled_arrival ? `scheduled arrival ${String(summary.scheduled_arrival).slice(0, 5)} IST` : null,
+    ].filter(Boolean).join(" · ");
+
+    renderKPIs(summary, delays);
+    renderDaily(daily);
+    try {
+      renderTrend(daily.filter(r => r.delay_minutes !== null));
+      renderDistribution(delays);
+    } catch (chartErr) {
+      console.error(chartErr);
+      document.getElementById("trend-empty").textContent = "Chart unavailable: " + chartErr.message;
+      document.getElementById("trend-empty").classList.remove("hidden");
+    }
+  } catch (err) {
+    console.error(err);
+    document.getElementById("train-subtitle").textContent = "Failed to load: " + err.message;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  let dark = false;
+  document.getElementById("theme-toggle").addEventListener("click", (e) => {
+    dark = !dark;
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    e.target.textContent = dark ? "☀️ Light" : "🌙 Dark";
+    location.reload();  // simplest correct repaint: charts re-read CSS vars on load
+  });
+  main();
+});
+</script>
+</body>
+</html>
