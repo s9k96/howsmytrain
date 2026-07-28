@@ -34,6 +34,10 @@ from app.poller import poll_all
 BEFORE = timedelta(minutes=10)
 AFTER = timedelta(minutes=90)
 
+# Shortest window we'll accept after clipping at midnight -- comfortably more
+# than the ~15 min trigger interval, so a late-night train still gets a tick.
+MIN_WINDOW = timedelta(minutes=45)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -61,6 +65,26 @@ def _runs_today(train: dict, now: datetime) -> bool:
     return DAYS[departure_day] in run_days
 
 
+def _window(arrival: str, now: datetime) -> tuple[datetime, datetime]:
+    """
+    When a poll of this train would give a near-final delay, on now's date.
+
+    The window never crosses midnight. It can't: `journey_date` is the poll
+    date, so a poll at 00:10 for a 23:58 arrival files under the next day --
+    where `already_polled` can't see it, so the same journey gets polled
+    again on the next tick, and the next. Clipping at 23:59 and sliding the
+    start back keeps one journey in one bucket.
+
+    ponytail: costs accuracy on trains arriving near midnight, which get read
+    up to ~45 min early. Take `journey_date` from RailRadar's `startDate`
+    (see TODO.md) and the window can wrap properly instead.
+    """
+    hh, mm, *_ = str(arrival).split(":")
+    target = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+    end = min(target + AFTER, target.replace(hour=23, minute=59))
+    return min(target - BEFORE, end - MIN_WINDOW), end
+
+
 def _due_now(trains: list[dict], now: datetime, already_polled: set[str]) -> list[str]:
     """Train numbers whose scheduled arrival falls in the window around now."""
     due = []
@@ -74,9 +98,8 @@ def _due_now(trains: list[dict], now: datetime, already_polled: set[str]) -> lis
         if not arrival:
             due.append(number)  # unknown schedule -> poll once to learn it
             continue
-        hh, mm, *_ = str(arrival).split(":")
-        target = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
-        if target - BEFORE <= now <= target + AFTER:
+        start, end = _window(arrival, now)
+        if start <= now <= end:
             due.append(number)
     return due
 

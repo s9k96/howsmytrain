@@ -88,6 +88,12 @@ RailRadar already returns `startDate` in every payload — `app/db.py:114` and
 delays across dates seriously, or any day-of-week analysis will be off by one
 for overnight trains.
 
+It also unblocks `_window` in `scripts/poll_due.py`, which currently clips the
+due window at 23:59 rather than letting it wrap past midnight — because a poll
+after midnight files under the wrong `journey_date`, where the once-per-day
+dedup can't see it. Fix `journey_date` and the clip can go, giving trains that
+arrive near midnight their full 100-minute window back.
+
 ### Monthly full refresh
 `run_days` is refreshed on every poll, so timetable changes propagate — but
 only for trains still being polled. If a train's run days change such that we

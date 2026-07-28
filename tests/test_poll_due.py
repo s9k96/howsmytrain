@@ -83,3 +83,29 @@ def test_overnight_train_not_due_when_departure_day_excluded():
 def test_unknown_run_days_still_polls():
     # Never polled -> we don't know its days yet; the poll is what teaches us.
     assert _due_now([_weekly("99999", "22:25:00", None)], NOW, set()) == ["99999"]
+
+
+# ---- midnight -------------------------------------------------------------
+# 20978 arrives 23:58, so BEFORE/AFTER would put 88 of its 100 minutes on the
+# following date -- unreachable, since the window is built on now's date.
+
+def test_late_night_window_slides_back_instead_of_wrapping():
+    assert _due_now([_train("20978", "23:58:00")], datetime(2026, 7, 26, 23, 20), set()) == ["20978"]
+
+
+def test_late_night_train_not_due_before_its_window_opens():
+    assert _due_now([_train("20978", "23:58:00")], datetime(2026, 7, 26, 23, 0), set()) == []
+
+
+def test_late_night_train_is_not_chased_past_midnight():
+    # A poll here would be filed under the 27th for a journey that ran on the
+    # 26th, and already_polled would never see it -- so it'd repeat every tick.
+    assert _due_now([_train("20978", "23:58:00")], datetime(2026, 7, 27, 0, 20), set()) == []
+
+
+def test_ordinary_window_is_unchanged_by_the_midnight_clip():
+    # Nowhere near midnight: still exactly BEFORE..AFTER around arrival.
+    assert _due_now([_train("12951", "08:32:00")], datetime(2026, 7, 26, 8, 21), set()) == []
+    assert _due_now([_train("12951", "08:32:00")], datetime(2026, 7, 26, 8, 22), set()) == ["12951"]
+    assert _due_now([_train("12951", "08:32:00")], datetime(2026, 7, 26, 10, 2), set()) == ["12951"]
+    assert _due_now([_train("12951", "08:32:00")], datetime(2026, 7, 26, 10, 3), set()) == []
