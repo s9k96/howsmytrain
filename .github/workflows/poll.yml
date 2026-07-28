@@ -7,11 +7,20 @@ name: Poll train delays
 # due-window plus frequent cheap checks tolerates both.
 on:
   schedule:
-    # Every 30 min, deliberately NOT on :00/:30. GitHub's scheduler is
-    # best-effort and those two minutes are the most contended on the
-    # platform -- runs there get delayed 10-40 min or dropped outright.
-    # Odd offsets are noticeably more punctual.
-    - cron: "7,37 * * * *"
+    # Asking every 10 min to actually GET one every ~30.
+    #
+    # GitHub's scheduler is best-effort and drops runs under load -- measured
+    # on this repo, a "*/30" schedule delivered 9 runs in 24h instead of 48,
+    # with gaps up to 231 min. Since a train is only due for 100 min, gaps
+    # that size lose the journey outright (12301 was missed exactly this way).
+    #
+    # Over-scheduling is the mitigation: runs cost nothing on a public repo
+    # (unlimited Actions minutes) and a run with nothing due makes zero API
+    # calls, so the RailRadar budget is unaffected.
+    # ponytail: brute force. If GitHub's reliability ever matters more than
+    # this, move the trigger to an external cron (cron-job.org -> repository
+    # dispatch) and drop back to a sparse schedule.
+    - cron: "3,13,23,33,43,53 * * * *"
   workflow_dispatch:
     inputs:
       all:
