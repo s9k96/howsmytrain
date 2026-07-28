@@ -4,6 +4,47 @@ Deliberate deferrals, with the trigger that should make each one worth doing.
 Nothing here is a bug — these are known, chosen trade-offs. Items are ordered
 by when they're likely to bite.
 
+## Settled decisions (why things look odd)
+
+### Why an external cron triggers the workflow
+
+`.github/workflows/poll.yml` declares a `schedule:` block *and* is triggered
+externally by cron-job.org via `repository_dispatch`. That looks redundant.
+It isn't.
+
+**GitHub's `schedule` trigger is throttled to roughly one run every two hours
+on this repo**, regardless of the cron expression. Measured over 2026-07-26 to
+07-28:
+
+| Cron asked for | Runs delivered | Median gap | Worst gap |
+|---|---|---|---|
+| `*/30` (48/day) | ~9/day | 124 min | 231 min |
+| `7,37` (48/day) | ~9/day | 117 min | 229 min |
+| `3,13,…` (144/day) | 1 run in 5 h | — | 175 min |
+
+Raising the requested rate six-fold produced **no additional runs**, and moving
+off the contended `:00`/`:30` minutes changed nothing — so it is neither tick
+frequency nor minute contention. `workflow_dispatch` and `repository_dispatch`
+runs, by contrast, start within seconds.
+
+**Why it mattered:** a train is only due for 100 minutes, so any gap longer
+than that loses the journey outright. On 2026-07-28, 6 of 14 closed windows
+were missed (43%), including the same 06:30–07:00 cluster two days running
+(12621, 12553, 12273, 12417).
+
+**Current setup:** cron-job.org POSTs `{"event_type":"poll"}` to
+`/repos/<owner>/howsmytrain/dispatches` every ~15 min with a fine-grained PAT
+(Contents: read/write). The `schedule:` block stays as a free fallback — a run
+with nothing due makes zero API calls, so it costs nothing.
+
+**Failure mode to watch:** that PAT expires. When it does, polling silently
+degrades to GitHub's ~2-hourly schedule rather than stopping outright, so it
+will not look broken. The health page's *Scheduler* tile and *runs today* are
+what catch it. Note the expiry date somewhere.
+
+**If this ever needs revisiting:** the honest alternative is moving the
+scheduler off GitHub entirely, not tuning the cron further.
+
 ## Decide with real data (revisit ~2 weeks after collection starts)
 
 ### Rotating sample budget for daily trains
@@ -110,8 +151,12 @@ come from, and `train.runDays` too. Strip the array, keep the derived fields.
 
 ## Operational
 
+- **The cron-job.org PAT expires.** Polling then degrades silently to GitHub's
+  ~2-hourly fallback rather than failing loudly. Watch the *Scheduler* tile.
 - GitHub disables scheduled workflows after **60 days without repo activity**.
-  Any commit resets the clock.
-- Scheduled runs don't fire for ~15 minutes after the first push.
+  Only affects the fallback now, but worth knowing.
 - The dashboard's distribution chart needs 5+ journeys and the trend line 2+
   before either renders. Expected; they fill in.
+- Data lost to a collection gap is **unrecoverable** — RailRadar only reports
+  currently-live runs, so there is no backfill. A day with missed windows stays
+  missing.

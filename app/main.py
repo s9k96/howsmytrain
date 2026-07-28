@@ -36,6 +36,22 @@ def on_startup() -> None:
     db.init_db()
 
 
+@app.middleware("http")
+async def no_cache(request, call_next):
+    """
+    Force revalidation on every request.
+
+    StaticFiles sends etag/last-modified but no Cache-Control, so browsers
+    fall back to heuristic freshness and will happily serve a stale
+    index.html without asking. The dashboard's JS is inline in those HTML
+    files, so a cached page means silently running old code -- which looks
+    exactly like a broken feature. Cheap here: revalidation is a 304.
+    """
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {

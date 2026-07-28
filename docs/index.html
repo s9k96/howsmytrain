@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HowsMyTrain</title>
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="./styles.css">
 <!-- Vendored, not CDN: the cdnjs URL this used to point at 404s, and a
      dashboard that dies without network access to a third party is worse
@@ -23,11 +25,11 @@
 <body>
   <div id="nav-slot"></div>
 
-  <div class="page">
+  <main class="page" id="main" tabindex="-1">
     <div class="page-head">
       <div class="eyebrow">Indian Railways · punctuality tracker</div>
       <h1>How late is my train?</h1>
-      <div class="meta" id="last-updated">Loading…</div>
+      <div class="meta" id="last-updated" role="status" aria-live="polite">Loading…</div>
     </div>
 
     <div class="banner hidden" id="config-banner">
@@ -50,6 +52,7 @@
           <input type="search" id="filter" placeholder="Filter by number, name or destination…" aria-label="Filter trains">
         </div>
       </div>
+      <div class="jrny-legend" id="fleet-legend"></div>
       <div class="table-scroll" id="fleet-container"></div>
     </div>
 
@@ -72,13 +75,58 @@
         Not enough data yet — the weekly view needs a few days of polling.
       </div>
     </div>
-  </div>
+  </main>
 
 <script>
 // Supabase access, formatting and schedule helpers live in common.js.
 
 let allTrains = [];      // train_summary rows that have at least one journey
 let waitingTrains = [];  // tracked but nothing recorded yet
+let historyBy = {};      // train_number -> [delay per journey_date, oldest first]
+let sortKey = "avg_delay_minutes";
+let sortDir = -1;        // worst-first is the useful default
+
+// null/undefined always sink to the bottom regardless of direction -- "no
+// data" is not a value and shouldn't win either end of the sort.
+function sorted(list) {
+  return [...list].sort((a, b) => {
+    const x = a[sortKey], y = b[sortKey];
+    const xe = x === null || x === undefined, ye = y === null || y === undefined;
+    if (xe && ye) return 0;
+    if (xe) return 1;
+    if (ye) return -1;
+    if (typeof x === "string" || typeof y === "string") {
+      return String(x).localeCompare(String(y)) * sortDir;
+    }
+    return (x - y) * sortDir;
+  });
+}
+
+// A real <button> inside the <th>: keyboard activation, focus ring and the
+// accessible role all come free, and aria-sort lives on the cell where
+// assistive tech expects it.
+function sortHeader(label, key, numeric) {
+  const active = sortKey === key;
+  const arrow = active ? (sortDir === 1 ? "↑" : "↓") : "";
+  const sort = active ? (sortDir === 1 ? "ascending" : "descending") : "none";
+  return `<th class="${numeric ? "num " : ""}sortable${active ? " active" : ""}" aria-sort="${sort}">
+    <button type="button" class="sort-btn" data-key="${key}" data-numeric="${numeric ? 1 : 0}">
+      ${label}<span class="sort-arrow" aria-hidden="true">${arrow}</span>
+    </button></th>`;
+}
+
+function wireSort(container) {
+  container.querySelectorAll("button.sort-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.key;
+      // Re-clicking a column flips it; a new column starts descending for
+      // numbers (worst first) and ascending for text.
+      if (sortKey === key) sortDir = -sortDir;
+      else { sortKey = key; sortDir = btn.dataset.numeric === "1" ? -1 : 1; }
+      applyFilter();
+    });
+  });
+}
 
 function renderHero(trains) {
   const withData = trains.filter(t => t.journeys_observed > 0);
@@ -126,24 +174,39 @@ function renderWaiting(trains, todayOnly) {
   container.innerHTML = `
     <table class="fleet tabular">
       <thead><tr>
-        <th>Train</th><th>Route</th><th>Dep → Arr</th><th>Runs on</th><th>Last checked</th>
+        <th>Train</th><th>Route &amp; time</th><th>Runs on</th><th>Last checked</th>
       </tr></thead>
       <tbody>${trains.map(t => {
+        const j = journeyState(t);
         const href = `./train.html?train=${encodeURIComponent(t.train_number)}`;
         return `
-        <tr data-href="${href}">
-          <td>
+        <tr data-href="${href}"${j ? ` class="j-${j.key}"` : ""}>
+          <td class="cell-train">
             <a href="${href}" class="t-num">${esc(t.train_number)}</a>
             <span class="t-name">${esc(t.name || "—")}</span>
           </td>
-          <td class="route">${routeText(t)}</td>
-          <td class="timing">${timingText(t)}</td>
-          <td>${runDaysDots(t.run_days)}</td>
-          <td class="dim">${t.updated_at ? new Date(t.updated_at).toLocaleDateString() : "never"}</td>
+          ${scheduleCell(t, j)}
+          <td data-label="Runs on">${runDaysDots(t.run_days)}</td>
+          <td class="dim" data-label="Last checked">${t.updated_at ? new Date(t.updated_at).toLocaleDateString() : "never"}</td>
         </tr>`;
       }).join("")}</tbody>
     </table>`;
   wireRows(container);
+}
+
+// The swatches are also the key: a colour on a row means nothing until this
+// says what it means. Empty (and hidden) when nothing is running today.
+function renderLegend(rows) {
+  const counts = { running: 0, done: 0, before: 0 };
+  for (const t of rows) {
+    const j = journeyState(t);
+    if (j) counts[j.key]++;
+  }
+  document.getElementById("fleet-legend").innerHTML =
+    counts.running + counts.done + counts.before === 0 ? "" :
+    ["running", "done", "before"].map(k =>
+      `<span class="jl ${k}"><i aria-hidden="true"></i>${counts[k]} ${JOURNEY_STATES[k].toLowerCase()}</span>`
+    ).join("");
 }
 
 function renderFleet(trains) {
@@ -156,39 +219,38 @@ function renderFleet(trains) {
     }</div>`;
     return;
   }
-  // Bar length is relative to the worst average in view, so the column stays
-  // readable whether the fleet runs 5 minutes or 5 hours late.
-  const worst = Math.max(10, ...trains.map(t => t.avg_delay_minutes || 0));
-
   container.innerHTML = `
     <table class="fleet tabular">
       <thead><tr>
-        <th>Train</th><th>Route</th><th>Dep → Arr</th><th>Runs on</th>
-        <th class="num">Avg delay</th><th>Relative</th>
-        <th class="num">On time</th><th class="num">Days</th><th>Status</th>
+        ${sortHeader("Train", "train_number", false)}
+        ${sortHeader("Route &amp; time", "scheduled_arrival", false)}
+        <th>Runs on</th>
+        ${sortHeader("Avg delay", "avg_delay_minutes", true)}
+        <th>Trend</th>
+        ${sortHeader("On time", "on_time_pct", true)}
+        ${sortHeader("Days", "journeys_observed", true)}
       </tr></thead>
       <tbody>${trains.map(t => {
         const b = band(t.avg_delay_minutes);
-        const pct = t.avg_delay_minutes ? Math.max(2, 100 * t.avg_delay_minutes / worst) : 0;
+        const j = journeyState(t);
         const href = `./train.html?train=${encodeURIComponent(t.train_number)}`;
         return `
-        <tr data-href="${href}">
-          <td>
+        <tr data-href="${href}"${j ? ` class="j-${j.key}"` : ""}>
+          <td class="cell-train">
             <a href="${href}" class="t-num">${esc(t.train_number)}</a>
             <span class="t-name">${esc(t.name || "—")}</span>
           </td>
-          <td class="route">${routeText(t)}</td>
-          <td class="timing">${timingText(t)}</td>
-          <td>${runDaysDots(t.run_days)}</td>
-          <td class="num ${t.avg_delay_minutes === null ? "" : "d-" + b.cls}">${t.avg_delay_minutes === null ? '<span class="dim">–</span>' : Math.round(t.avg_delay_minutes) + " min"}</td>
-          <td><div class="bar-track"><div class="bar-fill ${b.cls}" style="width:${pct}%"></div></div></td>
-          <td class="num">${t.on_time_pct === null ? '<span class="dim">–</span>' : t.on_time_pct + "%"}</td>
-          <td class="num">${t.journeys_observed}</td>
-          <td><span class="pill ${b.cls}">${b.text}</span></td>
+          ${scheduleCell(t, j)}
+          <td data-label="Runs on">${runDaysDots(t.run_days)}</td>
+          <td class="num ${t.avg_delay_minutes === null ? "" : "d-" + b.cls}" data-label="Avg delay" title="${b.text}">${t.avg_delay_minutes === null ? '<span class="dim">–</span>' : Math.round(t.avg_delay_minutes) + " min"}</td>
+          <td data-label="Trend" class="spark-cell ${b.cls}">${sparkline(historyBy[t.train_number] || [])}</td>
+          <td class="num" data-label="On time">${t.on_time_pct === null ? '<span class="dim">–</span>' : t.on_time_pct + "%"}</td>
+          <td class="num" data-label="Days">${t.journeys_observed}</td>
         </tr>`;
       }).join("")}</tbody>
     </table>`;
   wireRows(container);
+  wireSort(container);
 }
 
 let chartInstance = null;
@@ -271,13 +333,14 @@ function applyFilter() {
       .some(v => String(v ?? "").toLowerCase().includes(q)))
   );
 
-  const fleet = scoped(allTrains);
+  const fleet = sorted(scoped(allTrains));
   const waiting = scoped(waitingTrains);
 
   document.getElementById("fleet-heading").textContent = todayOnly
     ? `Scheduled today — ${fleet.length + waiting.length} trains`
     : `All tracked trains — ${allTrains.length + waitingTrains.length}`;
 
+  renderLegend([...fleet, ...waiting]);
   renderFleet(fleet);
   renderWaiting(waiting, todayOnly);
 }
@@ -289,10 +352,16 @@ async function main() {
     return;
   }
   try {
-    const [summary, weekly] = await Promise.all([
+    const [summary, weekly, history] = await Promise.all([
       sb("train_summary", "select=*&order=train_number"),
       sb("weekly_stats", "select=*&order=iso_week"),
+      // Per-day delays drive the row sparklines. One small query -- the view
+      // already excludes not-started runs.
+      sb("daily_delays", "select=train_number,journey_date,delay_minutes&order=journey_date"),
     ]);
+
+    historyBy = {};
+    for (const r of history) (historyBy[r.train_number] ||= []).push(r.delay_minutes);
 
     allTrains = summary.filter(t => t.journeys_observed > 0);
     waitingTrains = summary.filter(t => !t.journeys_observed);

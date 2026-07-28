@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DB view · HowsMyTrain</title>
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="./styles.css">
 <script src="./common.js"></script>
 <style>
@@ -22,11 +24,11 @@
 <body>
   <div id="nav-slot"></div>
 
-  <div class="page">
+  <main class="page" id="main" tabindex="-1">
     <div class="page-head">
       <div class="eyebrow">Every stored poll</div>
       <h1>Raw data</h1>
-      <div class="meta" id="summary">Loading…</div>
+      <div class="meta" id="summary" role="status" aria-live="polite">Loading…</div>
     </div>
 
     <div class="card">
@@ -41,7 +43,7 @@
       </div>
       <div class="db-scroll" id="table-container"></div>
     </div>
-  </div>
+  </main>
 
 <script>
 // Supabase access and formatting helpers live in common.js. This page used to
@@ -74,7 +76,7 @@ function render(polls) {
     </tr>
   `).join("");
   container.innerHTML = `
-    <table class="tabular">
+    <table class="tabular db-long">
       <thead><tr>
         <th>id</th><th>journey_date</th><th>train</th><th>delay</th>
         <th>status</th><th>station</th><th>polled_at (fetched)</th>

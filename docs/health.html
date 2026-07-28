@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Collection health · HowsMyTrain</title>
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="./styles.css">
 <script src="./common.js"></script>
 <style>
@@ -17,11 +19,11 @@
 <body>
   <div id="nav-slot"></div>
 
-  <div class="page">
+  <main class="page" id="main" tabindex="-1">
     <div class="page-head">
       <div class="eyebrow">Pipeline status</div>
       <h1>Collection health</h1>
-      <div class="meta" id="subtitle">Loading…</div>
+      <div class="meta" id="subtitle" role="status" aria-live="polite">Loading…</div>
     </div>
 
     <div class="hero" id="hero"></div>
@@ -40,7 +42,7 @@
       <div class="card-head"><h2>Trains needing attention</h2></div>
       <div class="table-scroll" id="attention"></div>
     </div>
-  </div>
+  </main>
 
 <script>
 const DAYS_BACK = 14;
@@ -108,7 +110,7 @@ function render(trains, polls, runs, now) {
 
   document.getElementById("hero").innerHTML = [
     ["Scheduler", lastRun ? Math.round(minsSinceRun) : "–", lastRun ? "min ago" : "",
-      lastRun ? `${runsToday} runs today · expects one every 30 min`
+      lastRun ? `${runsToday} runs today · external cron triggers every 15 min`
               : "no heartbeat yet — deploy the updated poller", "--series-1", runTone],
     ["Coverage", covPct === null ? "–" : covPct, covPct === null ? "" : "%",
       `${totAct} of ${totExp} expected polls`, "--series-3",
@@ -154,20 +156,19 @@ function render(trains, polls, runs, now) {
   document.getElementById("attention").innerHTML = !problem.length
     ? `<div class="empty-state">Nothing outstanding — every expected poll has landed.</div>`
     : `<table class="fleet tabular">
-        <thead><tr><th>Train</th><th>Route</th><th>Dep → Arr</th><th>Runs on</th>
+        <thead><tr><th>Train</th><th>Route &amp; time</th><th>Runs on</th>
           <th class="num">Missed</th><th>State</th></tr></thead>
         <tbody>${problem.map(({ t, missedDays, everPolled }) => {
           const href = `./train.html?train=${encodeURIComponent(t.train_number)}`;
           const tone = !everPolled ? "idle" : missedDays >= 2 ? "bad" : "warn";
           const label = !everPolled ? "Never polled" : missedDays >= 2 ? "Repeatedly missed" : "Missed once";
           return `<tr data-href="${href}">
-            <td><a href="${href}" class="t-num">${esc(t.train_number)}</a>
+            <td class="cell-train"><a href="${href}" class="t-num">${esc(t.train_number)}</a>
                 <span class="t-name">${esc(t.name || "—")}</span></td>
-            <td class="route">${routeText(t)}</td>
-            <td class="timing">${timingText(t)}</td>
-            <td>${runDaysDots(t.run_days)}</td>
-            <td class="num">${missedDays || "–"}</td>
-            <td><span class="pill ${tone}">${label}</span></td>
+            ${scheduleCell(t)}
+            <td data-label="Runs on">${runDaysDots(t.run_days)}</td>
+            <td class="num" data-label="Missed">${missedDays || "–"}</td>
+            <td data-label="State"><span class="pill ${tone}">${label}</span></td>
           </tr>`;
         }).join("")}</tbody>
       </table>`;

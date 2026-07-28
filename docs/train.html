@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Train · HowsMyTrain</title>
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="./styles.css">
 <script src="./vendor/chart.umd.min.js"></script>
 <script src="./common.js"></script>
@@ -17,12 +19,14 @@
 <body>
   <div id="nav-slot"></div>
 
-  <div class="page">
+  <main class="page" id="main" tabindex="-1">
     <div class="page-head">
       <div class="eyebrow"><a href="./index.html">← All trains</a></div>
       <h1 id="train-title">Loading…</h1>
-      <div class="meta" id="train-subtitle"></div>
+      <div class="meta" id="train-subtitle" role="status" aria-live="polite"></div>
     </div>
+
+    <div class="context hidden" id="context"></div>
 
     <div class="kpi-row" id="kpi-row"></div>
 
@@ -43,7 +47,7 @@
       <div class="card-head"><h2>Every recorded journey</h2></div>
       <div class="table-scroll" id="daily-table"></div>
     </div>
-  </div>
+  </main>
 
 <script>
 // Supabase access, formatting and schedule helpers live in common.js.
@@ -83,6 +87,39 @@ function median(xs) {
 // Just the class name -- common.js's band() returns {cls, text} and would
 // otherwise be shadowed by this.
 const tone = (m) => (m === null || m === undefined ? "" : band(m).cls);
+
+/**
+ * "59 min average" means nothing alone -- is that bad for this kind of train?
+ * Compare against the rest of the fleet that has data, and give a rank.
+ */
+function renderContext(summary, fleet) {
+  const el = document.getElementById("context");
+  const withData = fleet.filter(t => t.journeys_observed > 0 && t.avg_delay_minutes !== null);
+  if (summary.avg_delay_minutes === null || summary.avg_delay_minutes === undefined || withData.length < 2) {
+    el.classList.add("hidden");
+    return;
+  }
+  const mine = summary.avg_delay_minutes;
+  const avg = withData.reduce((a, t) => a + t.avg_delay_minutes, 0) / withData.length;
+  // Rank 1 = most punctual.
+  const rank = withData.filter(t => t.avg_delay_minutes < mine).length + 1;
+  const diff = mine - avg;
+  const better = diff < 0;
+  const word = Math.abs(diff) < 1 ? "about the same as" : `${Math.abs(Math.round(diff))} min ${better ? "better" : "worse"} than`;
+
+  el.className = "context";
+  el.innerHTML = `
+    <span class="pill ${better ? "good" : "bad"}">${better ? "Better than average" : "Worse than average"}</span>
+    <span>${word} the fleet average of <b>${Math.round(avg)} min</b>,
+    ranking <b>${ordinal(rank)}</b>
+    most punctual of ${withData.length} trains with data.</span>`;
+}
+
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);   // 1st 2nd 3rd 4th … 11th 21st
+}
 
 function renderKPIs(summary, delays) {
   const avg = delays.length ? Math.round(summary.avg_delay_minutes ?? 0) : null;
@@ -259,9 +296,11 @@ async function main() {
     return;
   }
   try {
-    const [summaryRows, daily] = await Promise.all([
+    const [summaryRows, daily, fleet] = await Promise.all([
       sb("train_summary", `select=*&train_number=eq.${encodeURIComponent(train)}`),
       sb("daily_delays", `select=*&train_number=eq.${encodeURIComponent(train)}&order=journey_date`),
+      // Fleet averages, for the comparison line. Small payload, one round trip.
+      sb("train_summary", "select=train_number,avg_delay_minutes,journeys_observed"),
     ]);
     const summary = summaryRows[0] || { train_number: train };
     const delays = daily.map(r => r.delay_minutes).filter(d => d !== null && d !== undefined);
@@ -274,6 +313,7 @@ async function main() {
       summary.scheduled_arrival ? `scheduled arrival ${String(summary.scheduled_arrival).slice(0, 5)} IST` : null,
     ].filter(Boolean).join(" · ");
 
+    renderContext(summary, fleet);
     renderKPIs(summary, delays);
     renderDaily(daily);
     try {
