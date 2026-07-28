@@ -6,6 +6,22 @@ name: Poll train delays
 # scheduled runs drift 5-20 minutes under load (and occasionally skip). A wide
 # due-window plus frequent cheap checks tolerates both.
 on:
+  # PRIMARY trigger. GitHub's `schedule` is throttled hard on this repo --
+  # measured over two days it delivers roughly one run every two hours no
+  # matter what the cron asks for (asking every 10 min instead of every 30
+  # produced no extra runs at all), and that loses ~40% of journeys because
+  # a train is only due for 100 min. `workflow_dispatch` and
+  # `repository_dispatch` runs, by contrast, start within seconds.
+  #
+  # An external cron POSTs to:
+  #   https://api.github.com/repos/<owner>/<repo>/dispatches
+  #   {"event_type": "poll"}
+  # See README -> "Scheduling background polling".
+  repository_dispatch:
+    types: [poll]
+
+  # FALLBACK only. Unreliable, but free and occasionally catches something
+  # if the external trigger goes down. Costs no API calls when nothing is due.
   schedule:
     # Asking every 10 min to actually GET one every ~30.
     #

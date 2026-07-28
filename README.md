@@ -124,8 +124,31 @@ GitHub only reads `.github/workflows/` at the repo root.
    | Variable | `TRAIN_NUMBERS` | `12301,12951,…` |
 
 3. **Bootstrap** — run the "Poll train delays" workflow manually with
-   *all* checked. This learns every train's arrival time; afterwards the
-   half-hourly schedule polls each train once near its own arrival.
+   *all* checked. This learns every train's arrival time; afterwards each
+   train is polled once near its own arrival.
+
+3b. **External trigger (needed — GitHub's cron is not reliable enough).**
+   Measured over two days, GitHub delivered roughly one scheduled run every
+   two hours regardless of the cron expression, losing ~40% of journeys
+   because a train is only due for 100 minutes. Manually-dispatched runs
+   start within seconds, so the fix is to trigger from outside.
+
+   Create a **fine-grained personal access token** scoped to this repo with
+   *Contents: Read and write*, then point any free cron service
+   (cron-job.org, EasyCron, a cheap VPS) at it every 15 minutes:
+
+   ```
+   POST https://api.github.com/repos/<owner>/howsmytrain/dispatches
+   Authorization: Bearer <token>
+   Accept: application/vnd.github+json
+   Content-Type: application/json
+
+   {"event_type": "poll"}
+   ```
+
+   A 204 means accepted. The workflow's `schedule:` block stays as a
+   fallback — it costs nothing, since a run with nothing due makes zero
+   API calls.
 
 4. **Pages** — Settings → Pages → deploy from branch, folder `/docs`. Then
    fill in `SUPABASE_URL` and `SUPABASE_ANON_KEY` at the top of the script in
