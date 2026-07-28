@@ -41,8 +41,12 @@
 
     <div class="card">
       <div class="card-head">
-        <h2>Tracked trains</h2>
+        <h2 id="fleet-heading">Tracked trains</h2>
         <div class="toolbar">
+          <label class="check">
+            <input type="checkbox" id="today-only" checked>
+            Today only
+          </label>
           <input type="search" id="filter" placeholder="Filter by number, name or destination…" aria-label="Filter trains">
         </div>
       </div>
@@ -107,13 +111,16 @@ function renderHero(trains) {
     </div>`).join("");
 }
 
-function renderWaiting(trains) {
+function renderWaiting(trains, todayOnly) {
   document.getElementById("waiting-summary").textContent =
-    `Awaiting first data — ${trains.length} train${trains.length === 1 ? "" : "s"}`;
+    `Awaiting first data — ${trains.length} train${trains.length === 1 ? "" : "s"}${todayOnly ? " scheduled today" : ""}`;
 
   const container = document.getElementById("waiting-container");
   if (!trains.length) {
-    container.innerHTML = `<div class="empty-state">Every tracked train has recorded at least one journey.</div>`;
+    container.innerHTML = `<div class="empty-state">${
+      todayOnly ? "Every train scheduled today has recorded a journey."
+                : "Every tracked train has recorded at least one journey."
+    }</div>`;
     return;
   }
   container.innerHTML = `
@@ -253,10 +260,26 @@ function renderTrend(weekly, trains) {
 
 function applyFilter() {
   const q = document.getElementById("filter").value.trim().toLowerCase();
-  renderFleet(!q ? allTrains : allTrains.filter(t =>
-    [t.train_number, t.name, t.source_code, t.destination_code]
-      .some(v => String(v ?? "").toLowerCase().includes(q))
-  ));
+  const todayOnly = document.getElementById("today-only").checked;
+  const today = new Date();
+
+  // arrivesOn() treats an unknown schedule as "yes" -- which is right here:
+  // the poller will check those trains too, precisely to learn their days.
+  const scoped = (list) => list.filter(t =>
+    (!todayOnly || arrivesOn(t, today)) &&
+    (!q || [t.train_number, t.name, t.source_code, t.destination_code]
+      .some(v => String(v ?? "").toLowerCase().includes(q)))
+  );
+
+  const fleet = scoped(allTrains);
+  const waiting = scoped(waitingTrains);
+
+  document.getElementById("fleet-heading").textContent = todayOnly
+    ? `Scheduled today — ${fleet.length + waiting.length} trains`
+    : `All tracked trains — ${allTrains.length + waitingTrains.length}`;
+
+  renderFleet(fleet);
+  renderWaiting(waiting, todayOnly);
 }
 
 async function main() {
@@ -275,8 +298,7 @@ async function main() {
     waitingTrains = summary.filter(t => !t.journeys_observed);
 
     renderHero(summary);
-    applyFilter();
-    renderWaiting(waitingTrains);
+    applyFilter();   // renders both the fleet and the waiting list
     try {
       renderTrend(weekly, allTrains);
     } catch (chartErr) {
@@ -297,6 +319,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("nav-slot").innerHTML = appbar("fleet");
   setupTheme(main);
   document.getElementById("filter").addEventListener("input", applyFilter);
+  document.getElementById("today-only").addEventListener("change", applyFilter);
   main();
 });
 </script>

@@ -503,6 +503,30 @@ a { color: var(--series-1); }
   color: var(--text-primary);
 }
 
+.toolbar .check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  border-radius: 9px;
+  padding: 7px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.toolbar .check:hover { border-color: var(--baseline); color: var(--text-primary); }
+.toolbar .check input { accent-color: var(--series-1); margin: 0; cursor: pointer; }
+.toolbar .check:has(input:checked) {
+  color: var(--series-1);
+  border-color: color-mix(in srgb, var(--series-1) 45%, transparent);
+  background: color-mix(in srgb, var(--series-1) 8%, var(--surface-1));
+}
+
 .toolbar input[type="search"]:focus-visible {
   outline: 2px solid var(--series-1);
   outline-offset: 1px;
