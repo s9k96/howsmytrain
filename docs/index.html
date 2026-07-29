@@ -85,6 +85,7 @@ let waitingTrains = [];  // tracked but nothing recorded yet
 let historyBy = {};      // train_number -> [delay per journey_date, oldest first]
 let sortKey = "avg_delay_minutes";
 let sortDir = -1;        // worst-first is the useful default
+let stateFilter = null;  // null | "running" | "done" | "before" -- set by the legend
 
 // null/undefined always sink to the bottom regardless of direction -- "no
 // data" is not a value and shouldn't win either end of the sort.
@@ -196,17 +197,33 @@ function renderWaiting(trains, todayOnly) {
 
 // The swatches are also the key: a colour on a row means nothing until this
 // says what it means. Empty (and hidden) when nothing is running today.
+//
+// They double as the journey-state filter -- clicking one narrows the table to
+// those trains, clicking it again clears it. Counts are of the search/today
+// scope only, never of the state selection, so the other two stay reachable
+// instead of collapsing to zero once one is picked.
 function renderLegend(rows) {
   const counts = { running: 0, done: 0, before: 0 };
   for (const t of rows) {
     const j = journeyState(t);
     if (j) counts[j.key]++;
   }
-  document.getElementById("fleet-legend").innerHTML =
+  const legend = document.getElementById("fleet-legend");
+  legend.innerHTML =
     counts.running + counts.done + counts.before === 0 ? "" :
-    ["running", "done", "before"].map(k =>
-      `<span class="jl ${k}"><i aria-hidden="true"></i>${counts[k]} ${JOURNEY_STATES[k].toLowerCase()}</span>`
+    ["running", "done", "before"].map(k => `
+      <button type="button" class="jl ${k}" data-state="${k}"
+              aria-pressed="${stateFilter === k}">
+        <i aria-hidden="true"></i>${counts[k]} ${JOURNEY_STATES[k].toLowerCase()}
+      </button>`
     ).join("");
+
+  legend.querySelectorAll("button.jl").forEach(btn => {
+    btn.addEventListener("click", () => {
+      stateFilter = stateFilter === btn.dataset.state ? null : btn.dataset.state;
+      applyFilter();
+    });
+  });
 }
 
 function renderFleet(trains) {
@@ -333,16 +350,27 @@ function applyFilter() {
       .some(v => String(v ?? "").toLowerCase().includes(q)))
   );
 
-  const fleet = sorted(scoped(allTrains));
+  const fleet = scoped(allTrains);
   const waiting = scoped(waitingTrains);
 
-  document.getElementById("fleet-heading").textContent = todayOnly
-    ? `Scheduled today — ${fleet.length + waiting.length} trains`
+  // Legend counts come from the pre-state scope, so picking one state doesn't
+  // zero out the other two and strand you there.
+  renderLegend([...fleet, ...waiting]);
+
+  // journeyState() is null for anything not running today, which is the right
+  // answer here: a train with no state today belongs to none of the three.
+  const byState = (list) =>
+    stateFilter ? list.filter(t => (journeyState(t) || {}).key === stateFilter) : list;
+  const shownFleet = byState(fleet);
+  const shownWaiting = byState(waiting);
+
+  document.getElementById("fleet-heading").textContent =
+    stateFilter ? `${JOURNEY_STATES[stateFilter]} — ${shownFleet.length + shownWaiting.length} trains`
+    : todayOnly ? `Scheduled today — ${fleet.length + waiting.length} trains`
     : `All tracked trains — ${allTrains.length + waitingTrains.length}`;
 
-  renderLegend([...fleet, ...waiting]);
-  renderFleet(fleet);
-  renderWaiting(waiting, todayOnly);
+  renderFleet(sorted(shownFleet));
+  renderWaiting(shownWaiting, todayOnly);
 }
 
 async function main() {

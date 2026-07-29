@@ -701,7 +701,7 @@ a { color: var(--series-1); }
 
 .jrny-legend {
   display: flex;
-  gap: 16px;
+  gap: 8px;   /* the chips carry their own padding now */
   flex-wrap: wrap;
   margin-bottom: 14px;
   font-size: 12px;
@@ -709,7 +709,21 @@ a { color: var(--series-1); }
 }
 .jrny-legend:empty { display: none; }
 
-.jl { display: inline-flex; align-items: center; gap: 6px; }
+/* Also the journey-state filter, so it has to be a real button -- keyboard
+   activation and the focus ring come from the global button rules. */
+.jl {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: inherit; color: inherit; background: none;
+  border: 1px solid transparent; border-radius: 999px;
+  padding: 4px 10px; cursor: pointer;
+}
+.jl:hover { background: var(--surface-2); }
+.jl[aria-pressed="true"] {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-primary);
+  font-weight: 600;
+}
 .jl i { width: 8px; height: 8px; border-radius: 999px; flex: none; }
 .jl.running i { background: var(--series-1); }
 .jl.done    i { background: var(--baseline); }

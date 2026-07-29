@@ -57,6 +57,13 @@ cp .env.example .env
 #   TRAIN_NUMBERS=12301,12951        (comma-separated, no spaces needed)
 ```
 
+Track one direction per route: if 12583 (LKO→ANVT) is in the list, leave out
+12584 (ANVT→LKO). The return leg is a second request per day for the same
+corridor. Note also that a number not in RailRadar's registry has no schedule
+to learn, so it never leaves the "unknown schedule" branch of
+`scripts/poll_due.py` and is polled on *every* run — a typo costs ~96 requests
+a day against a 50/day cap. Verify new numbers before adding them.
+
 ## Running it
 
 **One-off poll** (useful to sanity-check your API key/train numbers before

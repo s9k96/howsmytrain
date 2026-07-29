@@ -18,6 +18,7 @@
     color: var(--text-primary); border-radius: 8px; padding: 6px 10px; font-size: 13px;
   }
   .filters label { color: var(--text-muted); font-size: 12px; }
+  .filters input[type="search"] { flex: 1 1 260px; min-width: 200px; }
   td.mono { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 </style>
 </head>
@@ -33,8 +34,11 @@
 
     <div class="card">
       <div class="filters">
-        <label for="train-filter">Train</label>
-        <select id="train-filter"><option value="">All</option></select>
+        <input type="search" id="train-filter" list="train-list"
+               placeholder="Search by number or name…" aria-label="Search trains">
+        <!-- Native typeahead: the browser does the matching, and typing a name
+             the list doesn't have still filters, so it's a search not a picker. -->
+        <datalist id="train-list"></datalist>
         <label for="limit">Rows</label>
         <select id="limit">
           <option>200</option><option>500</option><option selected>2000</option>
@@ -57,6 +61,7 @@ function delayClass(m) {
 }
 
 let names = {};
+let allPolls = [];
 
 function render(polls) {
   const container = document.getElementById("table-container");
@@ -64,38 +69,53 @@ function render(polls) {
     container.innerHTML = `<div class="empty-state">No polls stored yet for this selection.</div>`;
     return;
   }
-  const rows = polls.map(p => `
-    <tr>
-      <td class="mono">${p.id}</td>
-      <td class="mono">${esc(p.journey_date)}</td>
-      <td>${esc(p.train_number)}${names[p.train_number] ? " · " + esc(names[p.train_number]) : ""}</td>
-      <td class="${delayClass(p.delay_minutes)}">${p.delay_minutes === null ? "–" : p.delay_minutes + " min"}</td>
-      <td>${esc(p.status ?? "–")}</td>
-      <td>${esc(p.current_station_code ?? "–")}</td>
-      <td class="mono">${new Date(p.polled_at).toLocaleString()}</td>
-    </tr>
-  `).join("");
+  const rows = polls.map(p => {
+    const href = `./train.html?train=${encodeURIComponent(p.train_number)}`;
+    return `
+    <tr data-href="${href}">
+      <td class="mono" data-label="id">${p.id}</td>
+      <td class="mono" data-label="journey_date">${esc(p.journey_date)}</td>
+      <td class="cell-train" data-label="train">
+        <a href="${href}" class="t-num">${esc(p.train_number)}</a>
+        <span class="t-name">${esc(names[p.train_number] || "—")}</span>
+      </td>
+      <td class="${delayClass(p.delay_minutes)}" data-label="delay">${p.delay_minutes === null ? "–" : p.delay_minutes + " min"}</td>
+      <td data-label="status">${esc(p.status ?? "–")}</td>
+      <td data-label="station">${esc(p.current_station_code ?? "–")}</td>
+      <td class="mono" data-label="polled_at">${new Date(p.polled_at).toLocaleString()}</td>
+    </tr>`;
+  }).join("");
   container.innerHTML = `
-    <table class="tabular db-long">
+    <table class="fleet tabular db-long">
       <thead><tr>
         <th>id</th><th>journey_date</th><th>train</th><th>delay</th>
         <th>status</th><th>station</th><th>polled_at (fetched)</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+  wireRows(container);
+}
+
+/** Number or name, substring, case-insensitive -- same rule as the fleet page. */
+function applyFilter() {
+  const q = document.getElementById("train-filter").value.trim().toLowerCase();
+  const shown = !q ? allPolls : allPolls.filter(p =>
+    p.train_number.toLowerCase().includes(q) ||
+    (names[p.train_number] || "").toLowerCase().includes(q)
+  );
+  render(shown);
+  const dates = new Set(shown.map(p => p.journey_date));
+  document.getElementById("summary").textContent =
+    `${shown.length} row${shown.length === 1 ? "" : "s"}`
+    + (q ? ` of ${allPolls.length}` : "")
+    + ` · ${dates.size} journey date${dates.size === 1 ? "" : "s"} · loaded ${new Date().toLocaleTimeString()}`;
 }
 
 async function load() {
-  const train = document.getElementById("train-filter").value;
   const limit = document.getElementById("limit").value;
-  const qs = `select=*&order=polled_at.desc&limit=${encodeURIComponent(limit)}`
-    + (train ? `&train_number=eq.${encodeURIComponent(train)}` : "");
   try {
-    const polls = await sb("polls", qs);
-    render(polls);
-    const dates = new Set(polls.map(p => p.journey_date));
-    document.getElementById("summary").textContent =
-      `${polls.length} row${polls.length === 1 ? "" : "s"} · ${dates.size} journey date${dates.size === 1 ? "" : "s"} · loaded ${new Date().toLocaleTimeString()}`;
+    allPolls = await sb("polls", `select=*&order=polled_at.desc&limit=${encodeURIComponent(limit)}`);
+    applyFilter();
   } catch (err) {
     console.error(err);
     document.getElementById("summary").textContent = "Failed to load: " + err.message;
@@ -104,19 +124,16 @@ async function load() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("nav-slot").innerHTML = appbar("db");
-  const sel = document.getElementById("train-filter");
+  const box = document.getElementById("train-filter");
   try {
     const trains = await sb("trains", "select=train_number,name&order=train_number");
     names = Object.fromEntries(trains.map(t => [t.train_number, t.name]));
-    for (const t of trains) {
-      const o = document.createElement("option");
-      o.value = t.train_number;
-      o.textContent = t.name ? `${t.train_number} · ${t.name}` : t.train_number;
-      sel.appendChild(o);
-    }
+    document.getElementById("train-list").innerHTML = trains.map(t =>
+      `<option value="${esc(t.train_number)}">${esc(t.name || "")}</option>`).join("");
   } catch (err) { console.error(err); }
 
-  sel.addEventListener("change", load);
+  // Filtering is local to the rows already fetched, so it can run per keystroke.
+  box.addEventListener("input", applyFilter);
   document.getElementById("limit").addEventListener("change", load);
   document.getElementById("refresh").addEventListener("click", load);
 

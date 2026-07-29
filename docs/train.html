@@ -12,6 +12,15 @@
 <style>
   .table-scroll { overflow-x: auto; }
   .note { color: var(--text-muted); font-size: 12px; margin-top: 10px; }
+  /* Facts flow into as many columns as fit rather than stacking as table rows,
+     which left most of the card empty on anything wider than a phone. */
+  .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px 24px; margin: 0; }
+  .kv > div { min-width: 0; }
+  .kv dt {
+    color: var(--text-muted); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 5px;
+  }
+  .kv dd { margin: 0; font-size: 14px; line-height: 1.4; }
   /* Chart cards size to plot + axis band so labels never force a nested scroll. */
   .chart-box { position: relative; height: 300px; }
 </style>
@@ -31,6 +40,11 @@
     <div class="kpi-row" id="kpi-row"></div>
 
     <div class="card">
+      <div class="card-head"><h2>Details</h2></div>
+      <div id="details"></div>
+    </div>
+
+    <div class="card">
       <div class="card-head"><h2>Final delay by day</h2></div>
       <div class="chart-box"><canvas id="trend-chart"></canvas></div>
       <div class="empty-state hidden" id="trend-empty"></div>
@@ -46,6 +60,16 @@
     <div class="card">
       <div class="card-head"><h2>Every recorded journey</h2></div>
       <div class="table-scroll" id="daily-table"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Every poll</h2></div>
+      <p class="note">
+        One row per API call, including the <code>not-started</code> readings
+        that <em>Every recorded journey</em> above leaves out — those are polls
+        that caught no live run, so they carry no usable delay.
+      </p>
+      <div class="table-scroll" id="polls-table"></div>
     </div>
   </main>
 
@@ -267,6 +291,58 @@ function renderDistribution(delays) {
   });
 }
 
+/**
+ * The schedule fields the poller maintains itself, so a wrong one is visible
+ * rather than silently skewing which days this train gets polled.
+ *
+ * Deliberately excludes number/name (the page title) and the delay averages
+ * (the KPI row) -- repeating them was what made this card mostly whitespace.
+ */
+function renderDetails(t) {
+  const j = journeyState(t);
+  const route = (t.source_code || t.destination_code)
+    ? `${esc(t.source_code || "?")} → ${esc(t.destination_code || "?")}`
+    : "unknown";
+  const timing = (t.scheduled_departure || t.scheduled_arrival)
+    ? `${hhmm(t.scheduled_departure)} → ${hhmm(t.scheduled_arrival)}`
+      + (t.arrival_day_offset ? ` <sup class="plus">+${t.arrival_day_offset}</sup>` : "")
+    : "unknown";
+
+  const facts = [
+    ["Route", route],
+    ["Scheduled", timing],
+    ["Runs on", runDaysDots(t.run_days)],
+    ["Today", j ? `<span class="pill ${j.key === "done" ? "good" : j.key === "running" ? "warn" : "idle"}">${j.label}</span>`
+                : `<span class="dim">not running today</span>`],
+    ["Schedule refreshed", t.updated_at ? new Date(t.updated_at).toLocaleDateString(undefined,
+      { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "never polled"],
+  ];
+  document.getElementById("details").innerHTML = `
+    <dl class="kv">${facts.map(([k, v]) => `
+      <div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>`;
+}
+
+function renderPolls(rows) {
+  const c = document.getElementById("polls-table");
+  if (!rows.length) {
+    c.innerHTML = `<div class="empty-state">No polls recorded for this train yet.</div>`;
+    return;
+  }
+  c.innerHTML = `
+    <table class="tabular">
+      <thead><tr><th>Polled at</th><th>Journey date</th><th>Status</th>
+        <th>Delay</th><th>Last seen</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr>
+          <td>${new Date(r.polled_at).toLocaleString()}</td>
+          <td>${esc(r.journey_date)}</td>
+          <td>${esc(r.status ?? "–")}</td>
+          <td class="${delayClass(r.delay_minutes)}">${fmt(r.delay_minutes)}</td>
+          <td>${esc(r.current_station_code ?? "–")}</td>
+        </tr>`).join("")}</tbody>
+    </table>`;
+}
+
 function renderDaily(rows) {
   const c = document.getElementById("daily-table");
   if (!rows.length) {
@@ -296,11 +372,12 @@ async function main() {
     return;
   }
   try {
-    const [summaryRows, daily, fleet] = await Promise.all([
+    const [summaryRows, daily, fleet, polls] = await Promise.all([
       sb("train_summary", `select=*&train_number=eq.${encodeURIComponent(train)}`),
       sb("daily_delays", `select=*&train_number=eq.${encodeURIComponent(train)}&order=journey_date`),
       // Fleet averages, for the comparison line. Small payload, one round trip.
       sb("train_summary", "select=train_number,avg_delay_minutes,journeys_observed"),
+      sb("polls", `select=*&train_number=eq.${encodeURIComponent(train)}&order=polled_at.desc&limit=500`),
     ]);
     const summary = summaryRows[0] || { train_number: train };
     const delays = daily.map(r => r.delay_minutes).filter(d => d !== null && d !== undefined);
@@ -309,13 +386,16 @@ async function main() {
     document.getElementById("train-title").textContent =
       summary.name ? `${train} · ${summary.name}` : train;
     document.getElementById("train-subtitle").textContent = [
-      summary.destination_code ? `Terminates ${summary.destination_code}` : null,
+      summary.source_code || summary.destination_code
+        ? `${summary.source_code || "?"} → ${summary.destination_code || "?"}` : null,
       summary.scheduled_arrival ? `scheduled arrival ${String(summary.scheduled_arrival).slice(0, 5)} IST` : null,
     ].filter(Boolean).join(" · ");
 
     renderContext(summary, fleet);
     renderKPIs(summary, delays);
+    renderDetails(summary);
     renderDaily(daily);
+    renderPolls(polls);
     try {
       renderTrend(daily.filter(r => r.delay_minutes !== null));
       renderDistribution(delays);
