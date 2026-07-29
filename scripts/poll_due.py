@@ -85,13 +85,23 @@ def _window(arrival: str, now: datetime) -> tuple[datetime, datetime]:
     return min(target - BEFORE, end - MIN_WINDOW), end
 
 
-def _due_now(trains: list[dict], now: datetime, already_polled: set[str]) -> list[str]:
+def _journey_date(train: dict, now: datetime) -> str:
+    """
+    The date the run arriving now departed its source -- i.e. what RailRadar's
+    `startDate` will say, and therefore the journey_date the poll lands under.
+
+    Same mapping _runs_today uses to turn an arrival day into a departure day.
+    """
+    return (now - timedelta(days=train.get("arrival_day_offset") or 0)).strftime("%Y-%m-%d")
+
+
+def _due_now(trains: list[dict], now: datetime, already_polled: set[tuple[str, str]]) -> list[str]:
     """Train numbers whose scheduled arrival falls in the window around now."""
     due = []
     for t in trains:
         number = t["train_number"]
-        if number in already_polled:
-            continue  # one reading per journey_date is all the daily stat needs
+        if (number, _journey_date(t, now)) in already_polled:
+            continue  # one reading per journey is all the daily stat needs
         if not _runs_today(t, now):
             continue  # doesn't run today -- polling returns the next run, not this one
         arrival = t.get("scheduled_arrival")
@@ -120,7 +130,9 @@ def main() -> int:
         due = configured
     else:
         known = {t["train_number"]: t for t in store.list_trains()}
-        already = store.polled_journey_dates(db.today_ist())
+        # Wide enough to cover the largest arrival_day_offset in the fleet (2)
+        # with slack, so an overnight run's earlier poll is still visible.
+        already = store.polled_journeys((now - timedelta(days=3)).strftime("%Y-%m-%d"))
         # Order by configured list so behaviour is deterministic.
         due = _due_now(
             [known.get(n, {"train_number": n, "scheduled_arrival": None}) for n in configured],

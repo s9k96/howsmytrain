@@ -77,22 +77,20 @@ rather than `not-started` rows before adding more of that shape.
 
 ## Correctness, when accuracy starts mattering
 
-### `journey_date` uses poll time, not the train's start date
-A train running past midnight has its journey split across two dates. Polls
-land near *arrival*, so for the 7 of 9 known trains with
-`arrival_day_offset=1`, the recorded date is the arrival day while the run
-belongs to the departure day.
+### ~~`journey_date` uses poll time~~ — done
+`app/poller.py:_extract_start_date` now files each poll under RailRadar's
+`startDate` (the run's departure date), and `poll_due.py` keys its dedup on
+`(train_number, journey_date)` to match. Polls recorded before this change
+still carry the arrival date; they are not backfilled.
 
-RailRadar already returns `startDate` in every payload — `app/db.py:114` and
-`app/store.py` would use it instead of `today_ist()`. Do this before comparing
-delays across dates seriously, or any day-of-week analysis will be off by one
-for overnight trains.
+### The due window still clips at midnight
+`_window` in `scripts/poll_due.py` ends a window at 23:59 rather than letting
+it wrap. With `journey_date` fixed, wrapping is now *safe* — but it needs
+`_window` to return which arrival date it matched, and `_journey_date` to use
+that instead of `now`, so the dedup stays aligned.
 
-It also unblocks `_window` in `scripts/poll_due.py`, which currently clips the
-due window at 23:59 rather than letting it wrap past midnight — because a poll
-after midnight files under the wrong `journey_date`, where the once-per-day
-dedup can't see it. Fix `journey_date` and the clip can go, giving trains that
-arrive near midnight their full 100-minute window back.
+Worth doing only if the accuracy matters: the clip costs one train (20978,
+arriving 23:58) a reading up to ~45 min early, and nothing else in the fleet.
 
 ### Monthly full refresh
 `run_days` is refreshed on every poll, so timetable changes propagate — but

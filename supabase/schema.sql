@@ -42,6 +42,26 @@ create table if not exists polls (
 create index if not exists idx_polls_train_date on polls (train_number, journey_date);
 create index if not exists idx_polls_polled_at  on polls (polled_at desc);
 
+-- When this train entered the fleet. Coverage is meaningless without it: the
+-- health page would otherwise count a train as "expected" on days before it
+-- was ever tracked, so adding trains silently tanks the reported percentage.
+--
+-- Added nullable and backfilled rather than defaulted, or every existing row
+-- would claim it was created the day this migration ran. Rows predating the
+-- column get one shared floor: the earliest poll on record. Their real
+-- creation time is not recoverable, and the per-train alternative (that
+-- train's first poll) is wrong in the direction that matters -- a train
+-- tracked for days before its first successful poll would have those misses
+-- erased, which is precisely what this metric exists to surface. A floor can
+-- only over-report misses, never hide one.
+--
+-- Must stay below `polls`: the backfill reads it, so on a fresh project this
+-- block cannot sit with the other `alter table trains` lines above.
+alter table trains add column if not exists created_at timestamptz;
+update trains set created_at = coalesce((select min(polled_at) from polls), now())
+    where created_at is null;
+alter table trains alter column created_at set default now();
+
 -- Heartbeat: one row per workflow execution, including the ~90% of runs that
 -- find nothing due and call the API zero times.
 --
@@ -118,6 +138,7 @@ select
     t.run_days,
     t.arrival_day_offset,
     t.updated_at,
+    t.created_at,
     count(d.delay_minutes)                                  as journeys_observed,
     round(avg(d.delay_minutes)::numeric, 1)                 as avg_delay_minutes,
     case when count(d.delay_minutes) > 0
@@ -127,7 +148,7 @@ from trains t
 left join daily_delays d using (train_number)
 group by t.train_number, t.name, t.source_code, t.destination_code,
          t.scheduled_departure, t.scheduled_arrival, t.run_days,
-         t.arrival_day_offset, t.updated_at;
+         t.arrival_day_offset, t.updated_at, t.created_at;
 
 -- ---------------------------------------------------------------------------
 -- Row Level Security

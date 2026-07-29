@@ -75,13 +75,17 @@ function render(trains, polls, runs, now) {
   for (const p of polls) (byDate[p.journey_date] ||= new Set()).add(p.train_number);
 
   const today = isoDate(now);
+  // A train can only be missed on days it was actually being tracked. Without
+  // this, adding trains retroactively invents misses for every earlier day and
+  // drags coverage down to a number that means nothing.
+  const trackedFrom = (t) => (t.created_at ? isoDate(new Date(t.created_at)) : "0000-00-00");
   const rows = [];
   for (let i = 0; i < DAYS_BACK; i++) {
     const d = new Date(now);
     d.setDate(d.getDate() - i);
     const key = isoDate(d);
     const expectedTrains = trains.filter(t =>
-      arrivesOn(t, d) && (key !== today || windowClosed(t, now))
+      arrivesOn(t, d) && key >= trackedFrom(t) && (key !== today || windowClosed(t, now))
     );
     const got = byDate[key] || new Set();
     const missed = expectedTrains.filter(t => !got.has(t.train_number));

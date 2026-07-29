@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from poll_due import _due_now
+from poll_due import _due_now, _journey_date
 
 NOW = datetime(2026, 7, 26, 22, 30)  # 22:30 IST
 
@@ -29,10 +29,10 @@ def test_train_arriving_much_later_is_not_due():
 
 
 def test_already_polled_today_is_skipped():
-    # One reading per journey_date is all daily_delays needs -- don't spend a
+    # One reading per journey is all daily_delays needs -- don't spend a
     # second API request on a train we already have today.
     trains = [_train("12584", "22:25:00")]
-    assert _due_now(trains, NOW, {"12584"}) == []
+    assert _due_now(trains, NOW, {("12584", "2026-07-26")}) == []
 
 
 def test_unknown_schedule_is_polled_to_learn_it():
@@ -83,6 +83,31 @@ def test_overnight_train_not_due_when_departure_day_excluded():
 def test_unknown_run_days_still_polls():
     # Never polled -> we don't know its days yet; the poll is what teaches us.
     assert _due_now([_weekly("99999", "22:25:00", None)], NOW, set()) == ["99999"]
+
+
+# ---- journey identity -----------------------------------------------------
+# A poll is filed under the run's DEPARTURE date (RailRadar's startDate), not
+# the date we polled on, so the dedup has to be keyed the same way.
+
+def test_same_day_train_is_keyed_to_todays_date():
+    assert _journey_date(_train("12584", "22:25:00"), NOW) == "2026-07-26"
+
+
+def test_overnight_train_is_keyed_to_its_departure_date():
+    # NOW is Sunday 22:30; an offset=1 train arriving now departed Saturday.
+    assert _journey_date(_weekly("13066", "22:25:00", ["sat"], offset=1), NOW) == "2026-07-25"
+
+
+def test_overnight_train_already_polled_under_departure_date_is_skipped():
+    t = _weekly("13066", "22:25:00", ["sat"], offset=1)
+    assert _due_now([t], NOW, {("13066", "2026-07-25")}) == []
+
+
+def test_a_different_journey_on_file_does_not_suppress_this_one():
+    # Keying on the poll date instead would have matched here and skipped a
+    # journey we have no reading for.
+    t = _weekly("13066", "22:25:00", ["sat"], offset=1)
+    assert _due_now([t], NOW, {("13066", "2026-07-26")}) == ["13066"]
 
 
 # ---- midnight -------------------------------------------------------------

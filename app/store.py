@@ -166,15 +166,22 @@ def list_trains() -> list[dict]:
     return resp.json()
 
 
-def polled_journey_dates(journey_date: str) -> set[str]:
-    """Train numbers already polled for the given journey_date."""
+def polled_journeys(since_date: str) -> set[tuple[str, str]]:
+    """
+    (train_number, journey_date) for every poll filed on or after since_date.
+
+    Keyed by journey rather than by poll date: journey_date is now the run's
+    departure date, so a train arriving this morning off an overnight run is
+    filed under yesterday. Checking "polled today" would miss it and re-poll
+    it on every remaining tick of its window.
+    """
     if not enabled():
-        rows = db.list_polls(since_date=journey_date, limit=2000)
-        return {r["train_number"] for r in rows if r["journey_date"] == journey_date}
+        rows = db.list_polls(since_date=since_date, limit=2000)
+        return {(r["train_number"], r["journey_date"]) for r in rows}
     resp = httpx.get(
-        _url(f"polls?select=train_number&journey_date=eq.{journey_date}"),
+        _url(f"polls?select=train_number,journey_date&journey_date=gte.{since_date}"),
         headers=_headers(),
         timeout=TIMEOUT,
     )
-    _check(resp, "polled_journey_dates")
-    return {r["train_number"] for r in resp.json()}
+    _check(resp, "polled_journeys")
+    return {(r["train_number"], r["journey_date"]) for r in resp.json()}

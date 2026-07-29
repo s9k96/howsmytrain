@@ -7,10 +7,6 @@
 <meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="./styles.css">
-<!-- Vendored, not CDN: the cdnjs URL this used to point at 404s, and a
-     dashboard that dies without network access to a third party is worse
-     than a 200KB file in the repo. -->
-<script src="./vendor/chart.umd.min.js"></script>
 <script src="./common.js"></script>
 <style>
   .banner {
@@ -19,7 +15,6 @@
     color: var(--text-secondary); font-size: 13px; line-height: 1.55;
   }
   .table-scroll { overflow-x: auto; }
-  .chart-box { position: relative; height: 300px; }
 </style>
 </head>
 <body>
@@ -67,14 +62,6 @@
         <div class="table-scroll" id="waiting-container"></div>
       </div>
     </details>
-
-    <div class="card">
-      <div class="card-head"><h2>Weekly average delay</h2></div>
-      <div class="chart-box"><canvas id="trend-chart"></canvas></div>
-      <div class="empty-state hidden" id="trend-empty">
-        Not enough data yet — the weekly view needs a few days of polling.
-      </div>
-    </div>
   </main>
 
 <script>
@@ -270,73 +257,6 @@ function renderFleet(trains) {
   wireSort(container);
 }
 
-let chartInstance = null;
-
-function renderTrend(weekly, trains) {
-  const canvas = document.getElementById("trend-chart");
-  const weeks = [...new Set(weekly.map(r => r.iso_week))].sort();
-  if (!weeks.length) {
-    document.getElementById("trend-empty").classList.remove("hidden");
-    canvas.parentElement.classList.add("hidden");
-    return;
-  }
-  document.getElementById("trend-empty").classList.add("hidden");
-  canvas.parentElement.classList.remove("hidden");
-
-  // Only trains that actually have weekly data get a series -- 33 lines would
-  // exhaust the 8 categorical slots and read as noise.
-  const active = trains.filter(t => weekly.some(r => r.train_number === t.train_number)).slice(0, 8);
-
-  const datasets = active.map((t, i) => {
-    const byWeek = Object.fromEntries(
-      weekly.filter(r => r.train_number === t.train_number)
-            .map(r => [r.iso_week, Number(r.avg_delay_minutes)])
-    );
-    return {
-      label: t.train_number,
-      data: weeks.map(w => byWeek[w] ?? null),
-      borderColor: seriesColor(i),
-      backgroundColor: seriesColor(i),
-      borderWidth: 2,
-      pointRadius: 4,
-      pointHoverRadius: 6,
-      pointBackgroundColor: seriesColor(i),
-      pointBorderColor: cssVar("--surface-1"),
-      pointBorderWidth: 2,
-      spanGaps: true,
-      tension: 0.15,
-    };
-  });
-
-  if (chartInstance) chartInstance.destroy();
-  chartInstance = new Chart(canvas.getContext("2d"), {
-    type: "line",
-    data: { labels: weeks, datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: "nearest", intersect: false },
-      plugins: {
-        legend: {
-          display: datasets.length > 1,
-          position: "bottom",
-          labels: { color: cssVar("--text-secondary"), boxWidth: 10, boxHeight: 10, usePointStyle: true },
-        },
-        tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.formattedValue} min avg delay` } },
-      },
-      scales: {
-        x: { grid: { color: cssVar("--gridline") }, ticks: { color: cssVar("--text-muted") } },
-        y: {
-          beginAtZero: true,
-          title: { display: true, text: "Avg delay (minutes)", color: cssVar("--text-muted") },
-          grid: { color: cssVar("--gridline") },
-          ticks: { color: cssVar("--text-muted") },
-        },
-      },
-    },
-  });
-}
-
 function applyFilter() {
   const q = document.getElementById("filter").value.trim().toLowerCase();
   const todayOnly = document.getElementById("today-only").checked;
@@ -380,9 +300,8 @@ async function main() {
     return;
   }
   try {
-    const [summary, weekly, history] = await Promise.all([
+    const [summary, history] = await Promise.all([
       sb("train_summary", "select=*&order=train_number"),
-      sb("weekly_stats", "select=*&order=iso_week"),
       // Per-day delays drive the row sparklines. One small query -- the view
       // already excludes not-started runs.
       sb("daily_delays", "select=train_number,journey_date,delay_minutes&order=journey_date"),
@@ -396,14 +315,6 @@ async function main() {
 
     renderHero(summary);
     applyFilter();   // renders both the fleet and the waiting list
-    try {
-      renderTrend(weekly, allTrains);
-    } catch (chartErr) {
-      console.error(chartErr);
-      const el = document.getElementById("trend-empty");
-      el.textContent = "Chart unavailable: " + chartErr.message;
-      el.classList.remove("hidden");
-    }
     document.getElementById("last-updated").textContent =
       `${allTrains.length} of ${summary.length} trains reporting · updated ${new Date().toLocaleTimeString()}`;
   } catch (err) {
@@ -414,7 +325,7 @@ async function main() {
 
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("nav-slot").innerHTML = appbar("fleet");
-  setupTheme(main);
+  setupTheme();
   document.getElementById("filter").addEventListener("input", applyFilter);
   document.getElementById("today-only").addEventListener("change", applyFilter);
   main();

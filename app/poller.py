@@ -54,6 +54,20 @@ def _extract_last_updated_at(data: dict) -> Optional[str]:
     return _first(data, "lastUpdatedAt", "updatedAt")
 
 
+def _extract_start_date(data: dict) -> Optional[str]:
+    """
+    The date the reported run DEPARTED its source, as 'YYYY-MM-DD'.
+
+    This is what a poll gets filed under, not the date we happened to poll on.
+    Polls land near arrival, so for the trains that arrive the day after they
+    depart, poll date and journey are a day apart -- filing by poll date split
+    one journey across two dates and shifted every day-of-week comparison by
+    one. RailRadar reports it top-level on every payload.
+    """
+    value = _first(data, "startDate")
+    return str(value)[:10] if value else None
+
+
 def _extract_run_days(data: dict) -> Optional[list[str]]:
     """
     Days the train DEPARTS its source, e.g. ['tue','thu','fri','sun'].
@@ -159,6 +173,7 @@ def poll_train(client: RailRadarClient, train_number: str) -> bool:
         current_station_status=loc_status,
         railradar_last_updated_at=last_updated_at,
         raw=data,
+        journey_date=_extract_start_date(data),
     )
     logger.info(
         "Polled %s (%s): status=%s delay=%smin at %s",
