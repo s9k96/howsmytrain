@@ -61,7 +61,8 @@ const WINDOW_DAYS = 30;          // widest range the toggle offers
 const REFRESH_MS = 5 * 60 * 1000;
 
 let summary = [];                // train_summary rows
-let byTrain = {};                // train_number -> { 'YYYY-MM-DD': delay }
+let byTrain = {};                // train_number -> { journey_date: delay }
+let todayPoll = {};              // train_number -> delay, for runs polled today
 let range = "today";
 let stateFilter = null;          // null | 'running' | 'done' | 'before'
 
@@ -95,28 +96,42 @@ function rowsFor(range) {
   return summary.map(t => {
     const hist = byTrain[t.train_number] || {};
     const seen = window.map(d => hist[d]).filter(v => v !== null && v !== undefined);
-    const delay = range === "today" ? (seen.length ? seen[seen.length - 1] : null)
+    // Presence of the key, not of a value: a poll that landed with a null
+    // delay is a reading we couldn't use, which is a different fact from
+    // never having polled -- and only the latter may fall back to the
+    // timetable. Without this a polled-but-unreadable run reads as hours late.
+    const polled = Object.prototype.hasOwnProperty.call(todayPoll, t.train_number);
+    const delay = range === "today" ? (polled ? todayPoll[t.train_number] : null)
                                     : (seen.length ? Math.round(mean(seen)) : null);
-    return { t, delay, observed: seen.length, state: journeyState(t, now) };
+    return { t, delay, polled, observed: seen.length, state: journeyState(t, now) };
   }).filter(r =>
     range === "today"
       ? r.t.journeys_observed > 0 && arrivesOn(r.t, now)
       : r.observed > 0
-  ).sort((a, b) => {
-    // Worst first; a service still awaiting today's poll sinks to the bottom
-    // rather than posing as punctual.
-    if (a.delay === null) return b.delay === null ? 0 : 1;
-    if (b.delay === null) return -1;
-    return b.delay - a.delay;
-  });
+  ).sort(range === "today" ? byJourney : worstFirst);
+}
+
+// Worst first, for the aggregate ranges where every row is a finished mean.
+// A service with nothing observed sinks rather than posing as punctual.
+function worstFirst(a, b) {
+  if (a.delay === null) return b.delay === null ? 0 : 1;
+  if (b.delay === null) return -1;
+  return b.delay - a.delay;
+}
+
+// Today reads as a running order, not a league table: what's out there now
+// comes first (soonest arrival at the top, since that's the one you're about
+// to meet), then the rest of the day in timetable order.
+function byJourney(a, b) {
+  const enRoute = (r) => (r.state && r.state.key === "running" ? 0 : 1);
+  return enRoute(a) - enRoute(b) || arrivalMinutes(a.t) - arrivalMinutes(b.t);
 }
 
 // ---------------------------------------------------------------------------
 // Hero -- always today, whatever the list is aggregating
 // ---------------------------------------------------------------------------
 function renderHero() {
-  const today = todayKey();
-  const todayDelay = (t) => (byTrain[t.train_number] || {})[today];
+  const todayDelay = (t) => todayPoll[t.train_number];
   const scheduled = summary.filter(t => arrivesOn(t, new Date()));
   const observed = scheduled
     .map(t => ({ t, delay: todayDelay(t) }))
@@ -164,11 +179,19 @@ function renderHero() {
           return `<i class="${d !== null && d !== undefined && band(d).cls === "good" ? "on" : ""}"></i>`;
         }).join("")}
       </div>
+      ${worst ? `
+      <a class="rail-worst" href="./train.html?train=${encodeURIComponent(worst.t.train_number)}">
+        <span class="rail-row">
+          <span class="k">WORST TODAY</span>
+          <span class="v" style="color:${scaleOf(worst.delay)}"
+            >${esc(worst.t.train_number)} · ${fmtDelay(worst.delay)}</span>
+        </span>
+        <span class="name">${esc(worst.t.name || "Unnamed service")}</span>
+      </a>` : `
       <div class="rail-row spaced">
         <span class="k">WORST TODAY</span>
-        <span class="v" style="color:${worst ? scaleOf(worst.delay) : "var(--text-3)"}">
-          ${worst ? `${esc(worst.t.train_number)} · ${fmtDelay(worst.delay)}` : "—"}</span>
-      </div>
+        <span class="v" style="color:var(--text-3)">—</span>
+      </div>`}
       <div class="rail-row">
         <span class="k">VS 7-DAY AVG</span>
         <span class="v" style="color:${delta === null ? "var(--text-3)" : delta <= 0 ? "var(--ontime)" : "var(--severe)"}">
@@ -233,6 +256,37 @@ function renderStates(rows) {
   });
 }
 
+/**
+ * The delay cell.
+ *
+ * With a poll for today's run, this is a measurement. Without one there is no
+ * delay to report -- an unpolled train is unknown, not punctual -- so the cell
+ * falls back to what the timetable alone can say, in a visibly different
+ * register: how long until it is due, or, once it is overdue, the floor on how
+ * late it would be if it hasn't arrived. Both are marked; neither is ever
+ * rendered as a plain number that could be mistaken for an observation.
+ */
+function delayCell({ t, delay, polled, observed }, multi) {
+  if (delay !== null) {
+    return `<span class="r-delay ${delay <= 0 ? "zero" : ""}"
+      title="${multi ? `Mean of ${observed} observed journeys` : band(delay).text}"
+      >${fmtDelay(delay)}</span>`;
+  }
+  if (polled && !multi) {
+    return `<span class="r-delay none" title="Polled today, but the run carried no usable delay">—</span>`;
+  }
+  const gap = multi ? null : arrivalGap(t);
+  if (gap === null) return `<span class="r-delay none">—</span>`;
+  if (gap > 0) {
+    return `<span class="r-delay prov" style="--scale:${scaleOf(gap)}"
+      title="Not polled yet. Scheduled in at ${hhmm(t.scheduled_arrival)} — at least this late unless it has already arrived."
+      >≥&nbsp;${fmtDelay(gap)}</span>`;
+  }
+  return `<span class="r-delay due"
+    title="Still running. Scheduled in at ${hhmm(t.scheduled_arrival)}; the poller reads it near arrival."
+    >DUE IN ${fmtDuration(-gap)}</span>`;
+}
+
 function renderRows(rows) {
   const reg = document.getElementById("reg");
   if (!rows.length) {
@@ -250,13 +304,19 @@ function renderRows(rows) {
       <span>NO.</span><span>SERVICE</span><span>ROUTE &amp; TIMETABLE</span>
       <span style="text-align:right">${multi ? "AVG ARR" : "ACTUAL"}</span>
       <span style="text-align:right">${multi ? "AVG DELAY" : "DELAY"}</span>
+      <span style="text-align:right" title="Delay as a share of the scheduled run">OF RUN</span>
       <span style="text-align:right">LAST 7 DAYS</span>
     </div>
-    ${rows.map(({ t, delay, observed, state }) => {
+    ${rows.map((r) => {
+      const { t, delay, observed, state } = r;
       const actual = delay === null ? "—" : shiftTime(t.scheduled_arrival, delay);
-      const meta = multi
-        ? `${observed} RUN${observed === 1 ? "" : "S"}`
-        : (state ? STATE_LABEL[state.key] : "NOT RUNNING TODAY");
+      const span = journeyMinutes(t);
+      const share = delayShare(delay, t);
+      const meta = [
+        multi ? `${observed} RUN${observed === 1 ? "" : "S"}`
+              : (state ? STATE_LABEL[state.key] : "NOT RUNNING TODAY"),
+        span ? fmtDuration(span) : null,      // scheduled length of the run
+      ].filter(Boolean).join(" · ");
 
       return `
       <a class="reg-row" href="./train.html?train=${encodeURIComponent(t.train_number)}"
@@ -268,8 +328,11 @@ function renderRows(rows) {
         </span>
         <span class="r-sched cell-sched">${scheduleStack(t, multi ? null : state)}</span>
         <span class="r-actual">${actual}</span>
-        <span class="r-delay ${delay === null ? "none" : delay <= 0 ? "zero" : ""}"
-              title="${multi ? `Mean of ${observed} observed journeys` : band(delay).text}">${fmtDelay(delay)}</span>
+        ${delayCell(r, multi)}
+        <span class="r-share" title="${span ? `${fmtDelay(delay)} on a ${fmtDuration(span)} run` : "Journey length unknown"}"
+          >${share === null ? "—"
+             : share <= 0 ? "0%"
+             : `${(share * 100).toFixed(share < 0.1 ? 1 : 0)}%`}</span>
         ${sparkbars(t.train_number)}
       </a>`;
     }).join("")}`;
@@ -369,7 +432,7 @@ async function load() {
     const [rows, hist, runs] = await Promise.all([
       sb("train_summary", "select=*&order=train_number"),
       sb("daily_delays",
-         `select=train_number,journey_date,delay_minutes&journey_date=gte.${isoDate(since)}&order=journey_date`),
+         `select=train_number,journey_date,delay_minutes,polled_at&journey_date=gte.${isoDate(since)}&order=journey_date`),
       // The heartbeat, not the last poll, says the scheduler is alive: most
       // runs correctly find nothing due and write no poll row at all.
       sb("poller_runs", "select=ran_at&order=ran_at.desc&limit=1").catch(() => []),
@@ -377,7 +440,19 @@ async function load() {
 
     summary = rows;
     byTrain = {};
-    for (const r of hist) (byTrain[r.train_number] ||= {})[r.journey_date] = r.delay_minutes;
+    todayPoll = {};
+    for (const r of hist) {
+      (byTrain[r.train_number] ||= {})[r.journey_date] = r.delay_minutes;
+      // "Did we get a reading for the run arriving today?" is answered by when
+      // the poll happened, not by journey_date. journey_date is mid-migration:
+      // app/poller.py now files a run under its DEPARTURE date, so an overnight
+      // train arriving this morning lands under yesterday and a journey_date ==
+      // today lookup would silently report all 21 offset>0 trains as unpolled.
+      // polled_at is near arrival under either convention. See TODO.md.
+      if (isoDate(new Date(r.polled_at)) === todayKey()) {
+        todayPoll[r.train_number] = r.delay_minutes;
+      }
+    }
 
     document.getElementById("notice").innerHTML = "";
     renderHero();

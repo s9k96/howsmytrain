@@ -88,6 +88,34 @@ function shiftTime(clock, minutes) {
   return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
 }
 
+/**
+ * Minutes between now and this train's scheduled arrival today: positive once
+ * it is overdue, negative while it is still due to come.
+ *
+ * Timetable arithmetic only. It says nothing about where the train actually
+ * is, which is why callers must label anything derived from it as scheduled
+ * rather than observed -- an unpolled train is unknown, not punctual.
+ */
+function arrivalGap(t, now = new Date()) {
+  if (!t.scheduled_arrival) return null;
+  const [h, m] = String(t.scheduled_arrival).split(":").map(Number);
+  const arr = new Date(now);
+  arr.setHours(h, m, 0, 0);
+  return Math.round((now - arr) / 6e4);
+}
+
+/** Minutes-of-day, for ordering a day's services by when they arrive. */
+function arrivalMinutes(t) {
+  if (!t.scheduled_arrival) return Infinity;   // unknown schedule sorts last
+  const [h, m] = String(t.scheduled_arrival).split(":").map(Number);
+  return h * 60 + m;
+}
+
+/** Compact duration: "45M", "6H10", "30H15". */
+function fmtDuration(m) {
+  return m < 60 ? `${m}M` : `${Math.floor(m / 60)}H${String(m % 60).padStart(2, "0")}`;
+}
+
 /** The poller and every schedule in the DB are IST; say so rather than imply it. */
 function istTime(d) {
   return d.toLocaleTimeString("en-GB", {
@@ -120,6 +148,34 @@ function arrivesOn(train, date) {
   return train.run_days.includes(weekKey(dep));
 }
 
+/**
+ * Scheduled journey length in minutes, source to destination.
+ *
+ * Also the denominator for delayShare(): 30 minutes on a 30-hour run and 30
+ * minutes on a 2-hour Shatabdi are not the same fact, and an absolute figure
+ * cannot tell them apart.
+ */
+function journeyMinutes(t) {
+  if (!t.scheduled_departure || !t.scheduled_arrival) return null;
+  const mins = (c) => {
+    const [h, m] = String(c).split(":").map(Number);
+    return h * 60 + m;
+  };
+  const span = mins(t.scheduled_arrival) - mins(t.scheduled_departure)
+             + (t.arrival_day_offset || 0) * 1440;
+  if (!Number.isFinite(span)) return null;
+  // An overnight run with no recorded offset would otherwise appear to arrive
+  // before it departs; roll it forward a day so the span stays positive.
+  return span <= 0 ? span + 1440 : span;
+}
+
+/** Delay as a fraction of the scheduled run; null if either side is unknown. */
+function delayShare(delayMinutes, t) {
+  const span = journeyMinutes(t);
+  if (delayMinutes === null || delayMinutes === undefined || !span) return null;
+  return delayMinutes / span;
+}
+
 const JOURNEY_STATES = { before: "Not departed", running: "En route", done: "Completed" };
 
 /**
@@ -136,18 +192,12 @@ const JOURNEY_STATES = { before: "Not departed", running: "En route", done: "Com
 function journeyState(t, now = new Date()) {
   if (!t.scheduled_departure || !t.scheduled_arrival || !arrivesOn(t, now)) return null;
 
-  const at = (clock) => {
-    const [h, m] = String(clock).split(":");
-    const d = new Date(now);
-    d.setHours(Number(h), Number(m), 0, 0);
-    return d;
-  };
-  const arr = at(t.scheduled_arrival);
-  const dep = at(t.scheduled_departure);
-  dep.setDate(dep.getDate() - (t.arrival_day_offset || 0));
-  // An overnight run with no recorded offset would otherwise depart after it
-  // arrives; roll it back a day so the span stays positive.
-  if (dep >= arr) dep.setDate(dep.getDate() - 1);
+  const [h, m] = String(t.scheduled_arrival).split(":").map(Number);
+  const arr = new Date(now);
+  arr.setHours(h, m, 0, 0);
+  // Departure is derived from the arrival and the scheduled span, so the
+  // overnight rollback lives in exactly one place (journeyMinutes).
+  const dep = new Date(arr.getTime() - journeyMinutes(t) * 60000);
 
   const key = now < dep ? "before" : now < arr ? "running" : "done";
   const pct = Math.max(0, Math.min(100, (100 * (now - dep)) / (arr - dep)));

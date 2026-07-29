@@ -16,7 +16,9 @@ const assert = require("assert");
 const ctx = { console };
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, "common.js"), "utf8"), ctx);
-const { journeyState, fmtDelay, scaleOf, shiftTime, runDaysText, band } = ctx;
+const { journeyState, fmtDelay, scaleOf, shiftTime, runDaysText, band,
+        arrivalGap, arrivalMinutes, fmtDuration,
+        journeyMinutes, delayShare } = ctx;
 
 const DAILY = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const day   = { scheduled_departure: "06:00:00", scheduled_arrival: "12:00:00", arrival_day_offset: 0, run_days: DAILY };
@@ -79,4 +81,49 @@ assert.strictEqual(runDaysText(null), "schedule unknown");
 assert.strictEqual(band(10).cls, "good");
 assert.strictEqual(band(11).cls, "warn");
 
-console.log(`${cases.length} journeyState cases + 24 scale/format cases pass`);
+// ---- Timetable arithmetic for unpolled runs --------------------------------
+// Sign is load-bearing: positive drives the "at least this late" floor and
+// negative drives the countdown, so a flip would assert a delay for every
+// train still on its way.
+const at = (clock) => new Date(`2026-07-29T${clock}:00`);
+const arr2055 = { scheduled_arrival: "20:55:00" };
+
+assert.strictEqual(arrivalGap(arr2055, at("20:25")), -30);   // due in 30 min
+assert.strictEqual(arrivalGap(arr2055, at("20:55")), 0);     // due exactly now
+assert.strictEqual(arrivalGap(arr2055, at("21:25")), 30);    // 30 min overdue
+assert.strictEqual(arrivalGap({ scheduled_arrival: "17:35:00" }, at("20:25")), 170);
+assert.strictEqual(arrivalGap({ scheduled_arrival: null }, at("20:25")), null);
+
+// Unknown schedules sort last rather than to the top of the day.
+assert.strictEqual(arrivalMinutes({ scheduled_arrival: "05:05:00" }), 305);
+assert.strictEqual(arrivalMinutes({ scheduled_arrival: "23:10:00" }), 1390);
+assert.strictEqual(arrivalMinutes({ scheduled_arrival: null }), Infinity);
+
+assert.strictEqual(fmtDuration(30), "30M");
+assert.strictEqual(fmtDuration(59), "59M");
+assert.strictEqual(fmtDuration(60), "1H00");
+assert.strictEqual(fmtDuration(155), "2H35");
+
+// ---- Journey length and relative delay -------------------------------------
+// journeyMinutes is the denominator for every share on the page and is also
+// what journeyState derives its departure from, so an error here moves the
+// progress track as well as the metric.
+assert.strictEqual(journeyMinutes(day), 360);            // 06:00 -> 12:00
+assert.strictEqual(journeyMinutes(over), 480);           // 22:00 -> 06:00 (+1)
+assert.strictEqual(journeyMinutes(noOff), 480);          // same run, offset missing
+assert.strictEqual(journeyMinutes({ ...day, arrival_day_offset: 1 }), 1800);   // 30h
+assert.strictEqual(journeyMinutes({ scheduled_arrival: "12:00:00" }), null);   // no departure
+
+// 05580: ANVT 05:15 -> PRNC 11:30 next day = 30h15m, and 630 min late is a
+// quarter of the run -- the case that motivated the metric.
+const purnia = { scheduled_departure: "05:15:00", scheduled_arrival: "11:30:00", arrival_day_offset: 1 };
+assert.strictEqual(journeyMinutes(purnia), 1815);
+assert.strictEqual(Math.round(delayShare(630, purnia) * 1000) / 10, 34.7);
+
+// Same absolute delay, very different facts.
+assert.ok(delayShare(30, day) > delayShare(30, purnia));
+assert.strictEqual(delayShare(0, day), 0);               // on time is a real 0%
+assert.strictEqual(delayShare(null, day), null);
+assert.strictEqual(delayShare(30, { scheduled_arrival: "12:00:00" }), null);
+
+console.log(`${cases.length} journeyState cases + 47 scale/format/timetable/share cases pass`);

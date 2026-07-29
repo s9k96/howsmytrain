@@ -349,6 +349,22 @@ a { color: var(--text); }
 .rail-row.lead .v { font-size: 15px; }
 .rail-row.spaced { margin-top: 8px; }
 
+/* The worst service is the one row worth opening, so the whole block is the
+   link. Number and delay keep the rail's label/value rhythm; the name goes
+   underneath, where it has the full width to wrap into. */
+.rail-worst { display: block; margin-top: 8px; text-decoration: none; }
+
+.rail-worst .name {
+  display: block;
+  font: 500 12.5px/1.35 var(--sans);
+  color: var(--text-2);
+  margin-top: 5px;
+  text-wrap: pretty;
+}
+
+.rail-worst:hover .name { color: var(--text); }
+.rail-worst:hover .v { text-decoration: underline; text-underline-offset: 2px; }
+
 /* One segment per tracked service; mint means that service ran on time. */
 .strip { display: flex; gap: 4px; height: 8px; }
 .strip i { flex: 1; background: var(--bar-neutral); }
@@ -430,7 +446,7 @@ a { color: var(--text); }
 .reg-head,
 .reg-row {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr) 150px 68px 92px 128px;
+  grid-template-columns: 96px minmax(0, 1fr) 150px 68px 92px 58px 128px;
   align-items: center;
   gap: 18px;
 }
@@ -483,6 +499,28 @@ a { color: var(--text); }
 
 .r-delay.zero { font-size: 11px; font-weight: 500; letter-spacing: 0.04em; }
 .r-delay.none { color: var(--text-3); font-weight: 400; }
+
+/* Delay against the length of the run. Deliberately uncoloured: the scale is
+   calibrated in minutes, and a second chromatic scale would compete with it
+   for the same glance. Sub-10% gets a decimal so a 4h Shatabdi and a 30h
+   express don't both collapse to "0%". */
+.r-share {
+  font: 400 12.5px/1.2 var(--mono);
+  color: var(--text-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Timetable-derived, not measured. Both wear a lighter weight than an
+   observed figure so a glance down the column never mistakes one for the
+   other; only the overdue floor carries the scale colour, and dimmed. */
+.r-delay.prov { font-weight: 500; font-size: 13px; opacity: 0.7; white-space: nowrap; }
+.r-delay.due {
+  font: 400 10.5px/1.2 var(--mono);
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  white-space: nowrap;
+}
 
 /* ---- Sparkbars ----------------------------------------------------------
    Seven fixed slots so the shape of the week reads down the column. A day
@@ -1029,7 +1067,7 @@ sup.plus { position: relative; }
    columns. The sparkbars go first: they show shape, and the shape is on the
    train's own page. */
 @media (max-width: 1000px) {
-  .reg-head, .reg-row { grid-template-columns: 88px minmax(0, 1fr) 144px 64px 84px; gap: 14px; }
+  .reg-head, .reg-row { grid-template-columns: 88px minmax(0, 1fr) 144px 64px 84px 54px; gap: 14px; }
   .reg-head span:last-child, .spark { display: none; }
 }
 
@@ -1083,7 +1121,7 @@ sup.plus { position: relative; }
     margin: 0 -20px;
   }
 
-  .r-no, .r-actual, .r-meta, .spark { display: none; }
+  .r-no, .r-actual, .r-share, .spark { display: none; }
   .r-name { font-size: 14px; }
   .r-sched { grid-column: 1; grid-row: 2; }
   .r-sched .stack { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }

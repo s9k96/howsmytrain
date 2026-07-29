@@ -77,11 +77,47 @@ rather than `not-started` rows before adding more of that shape.
 
 ## Correctness, when accuracy starts mattering
 
-### ~~`journey_date` uses poll time~~ — done
-`app/poller.py:_extract_start_date` now files each poll under RailRadar's
+### `journey_date` — fix shipped, **not yet verified**. Watch this.
+`app/poller.py:_extract_start_date` files each poll under RailRadar's
 `startDate` (the run's departure date), and `poll_due.py` keys its dedup on
-`(train_number, journey_date)` to match. Polls recorded before this change
-still carry the arrival date; they are not backfilled.
+`(train_number, journey_date)` to match. Shipped in `03af7ec`, 2026-07-29
+13:45 IST. Polls before that carry the arrival date and are not backfilled.
+
+**It has never actually been exercised.** As of 2026-07-29 21:00 IST, all 5
+polls since the fix are `arrival_day_offset = 0` trains, where the departure
+date and the poll date are the same day — so they cannot tell the two
+conventions apart. 68 of 68 stored polls still carry the poll date. The first
+real test is the next **overnight** train (21 of 39 have `offset > 0`; the
+early-morning cluster — 12425 arr 05:00 +1, 12565 arr 05:05 +1, 12615 arr
+05:10 +2 — gets there first).
+
+**What to check on the first offset>0 poll after the fix:**
+
+1. Its `journey_date` should be the **day before** the poll date. If it still
+   equals the poll date, `startDate` isn't landing where `_first(data,
+   "startDate")` looks and the fix is silently a no-op.
+2. No duplicate polls in that train's window. `poll_due._journey_date` derives
+   the dedup key as `now - offset`; if the stored value doesn't match, the
+   train is re-polled on every remaining tick of its 100-minute window —
+   roughly 6 wasted requests each, against a 50/day budget.
+
+```sql
+-- both conventions, side by side
+select p.train_number, t.arrival_day_offset, p.journey_date,
+       (p.polled_at at time zone 'Asia/Kolkata')::date as polled_ist, count(*) over
+       (partition by p.train_number, p.journey_date) as polls_in_bucket
+from polls p join trains t using (train_number)
+where t.arrival_day_offset > 0 and p.polled_at > '2026-07-29 08:15Z'
+order by p.polled_at desc;
+```
+
+**Coupled to the dashboard.** `docs/index.html` answers "did today's run
+report?" from `polled_at`, *not* `journey_date`, precisely because the latter
+is mid-migration — keying on `journey_date == today` would drop every
+overnight train from the TODAY view the moment the fix takes effect. Anything
+else that buckets by day (the row sparkbars, the weekly panel) still uses
+`journey_date` and will read a day early for overnight trains until the
+legacy rows age out of the 30-day window.
 
 ### The due window still clips at midnight
 `_window` in `scripts/poll_due.py` ends a window at 23:59 rather than letting
