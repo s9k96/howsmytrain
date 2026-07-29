@@ -181,21 +181,6 @@ function renderPollsTable(polls) {
   `;
 }
 
-// ---- Theme toggle --------------------------------------------------------
-
-function setupThemeToggle() {
-  const btn = document.getElementById("theme-toggle");
-  const stored = null; // no localStorage in this starter -- wire up your own persistence if desired
-  let current = stored || "auto";
-  btn.addEventListener("click", () => {
-    current = current === "dark" ? "light" : "dark";
-    document.documentElement.setAttribute("data-theme", current);
-    btn.textContent = current === "dark" ? "☀️ Light" : "🌙 Dark";
-    // repaint chart with new CSS var colors
-    main();
-  });
-}
-
 // ---- Table-view toggle for the chart -------------------------------------
 
 function setupTrendTableToggle() {
@@ -232,7 +217,6 @@ async function main() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  setupThemeToggle();
   setupTrendTableToggle();
   main();
 });

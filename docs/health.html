@@ -4,22 +4,22 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Collection health · HowsMyTrain</title>
-<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#0c0c0d">
 <link rel="stylesheet" href="./styles.css">
 <script src="./common.js"></script>
 <style>
   .table-scroll { overflow-x: auto; }
   .cov { display: flex; align-items: center; gap: 9px; min-width: 150px; }
   .cov .bar-track { flex: 1; }
-  .miss { font-size: 12px; color: var(--text-muted); }
-  .miss b { color: var(--status-serious); font-weight: 600; }
+  .miss { font-size: 11.5px; color: var(--text-3); }
+  .miss b { color: var(--late); font-weight: 600; }
 </style>
 </head>
 <body>
+<div class="page">
   <div id="nav-slot"></div>
 
-  <main class="page" id="main" tabindex="-1">
+  <main id="main" tabindex="-1">
     <div class="page-head">
       <div class="eyebrow">Pipeline status</div>
       <h1>Collection health</h1>
@@ -43,6 +43,7 @@
       <div class="table-scroll" id="attention"></div>
     </div>
   </main>
+</div>
 
 <script>
 const DAYS_BACK = 14;
@@ -107,6 +108,7 @@ function render(trains, polls, runs, now) {
   // The heartbeat, not the last poll, is what says the scheduler is alive:
   // most runs correctly find nothing due and write no poll rows.
   const lastRun = runs.length ? new Date(Math.max(...runs.map(r => new Date(r.ran_at)))) : null;
+  setPolled(lastRun, lastRun ? null : "NO HEARTBEAT");
   const minsSinceRun = lastRun ? (now - lastRun) / 6e4 : null;
   const runTone = minsSinceRun === null ? "idle"
     : minsSinceRun < 45 ? "good" : minsSinceRun < 120 ? "warn" : "bad";
@@ -184,9 +186,9 @@ function render(trains, polls, runs, now) {
 
 async function main() {
   document.getElementById("nav-slot").innerHTML = appbar("health");
-  setupTheme();
   if (!configured()) {
     document.getElementById("subtitle").textContent = "Awaiting Supabase config";
+    setPolled(null, "NOT CONFIGURED");
     return;
   }
   try {

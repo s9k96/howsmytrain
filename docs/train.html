@@ -4,31 +4,31 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Train · HowsMyTrain</title>
-<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#0c0c0d">
 <link rel="stylesheet" href="./styles.css">
 <script src="./vendor/chart.umd.min.js"></script>
 <script src="./common.js"></script>
 <style>
   .table-scroll { overflow-x: auto; }
-  .note { color: var(--text-muted); font-size: 12px; margin-top: 10px; }
+  .note { color: var(--text-3); font-size: 12px; line-height: 1.55; margin-top: 10px; max-width: 68ch; }
   /* Facts flow into as many columns as fit rather than stacking as table rows,
      which left most of the card empty on anything wider than a phone. */
   .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px 24px; margin: 0; }
   .kv > div { min-width: 0; }
   .kv dt {
-    color: var(--text-muted); font-size: 11px; font-weight: 600;
-    letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 5px;
+    font: 400 10.5px/1.3 var(--mono); letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-label); margin-bottom: 6px;
   }
-  .kv dd { margin: 0; font-size: 14px; line-height: 1.4; }
+  .kv dd { margin: 0; font: 400 13px/1.4 var(--mono); }
   /* Chart cards size to plot + axis band so labels never force a nested scroll. */
   .chart-box { position: relative; height: 300px; }
 </style>
 </head>
 <body>
+<div class="page">
   <div id="nav-slot"></div>
 
-  <main class="page" id="main" tabindex="-1">
+  <main id="main" tabindex="-1">
     <div class="page-head">
       <div class="eyebrow"><a href="./index.html">← All trains</a></div>
       <h1 id="train-title">Loading…</h1>
@@ -72,6 +72,7 @@
       <div class="table-scroll" id="polls-table"></div>
     </div>
   </main>
+</div>
 
 <script>
 // Supabase access, formatting and schedule helpers live in common.js.
@@ -177,14 +178,16 @@ function renderTrend(rows) {
       ? "Only one journey recorded so far — a trend needs at least two days."
       : "No journeys recorded yet.";
     empty.classList.remove("hidden");
-    box.classList.add("hidden");
+    // The chart-box, not the canvas: it carries the fixed 300px height, so
+    // hiding only the canvas leaves the card as a tall empty hole.
+    box.parentElement.classList.add("hidden");
     return;
   }
   empty.classList.add("hidden");
-  box.classList.remove("hidden");
+  box.parentElement.classList.remove("hidden");
 
   // Chart.js refuses a canvas that already hosts a chart -- must destroy on
-  // re-render (theme toggle calls main() again).
+  // re-render.
   if (trendChart) trendChart.destroy();
   trendChart = new Chart(box.getContext("2d"), {
     type: "line",
@@ -248,11 +251,11 @@ function renderDistribution(delays) {
     empty.textContent =
       `${delays.length} journey${delays.length === 1 ? "" : "s"} recorded — a distribution needs at least ${MIN_FOR_DISTRIBUTION} to mean anything. Counts are in the table below.`;
     empty.classList.remove("hidden");
-    box.classList.add("hidden");
+    box.parentElement.classList.add("hidden");
     return;
   }
   empty.classList.add("hidden");
-  box.classList.remove("hidden");
+  box.parentElement.classList.remove("hidden");
 
   if (distChart) distChart.destroy();
   distChart = new Chart(box.getContext("2d"), {
@@ -391,6 +394,9 @@ async function main() {
       summary.scheduled_arrival ? `scheduled arrival ${String(summary.scheduled_arrival).slice(0, 5)} IST` : null,
     ].filter(Boolean).join(" · ");
 
+    setPolled(polls.length ? new Date(polls[0].polled_at) : null,
+              polls.length ? `LAST SEEN ${istTime(new Date(polls[0].polled_at))} IST` : "NEVER POLLED",
+              true);
     renderContext(summary, fleet);
     renderKPIs(summary, delays);
     renderDetails(summary);
@@ -412,7 +418,6 @@ async function main() {
 
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("nav-slot").innerHTML = appbar("fleet");
-  setupTheme(main);   // charts re-read CSS vars on re-render
   main();
 });
 </script>

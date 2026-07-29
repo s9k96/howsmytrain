@@ -4,208 +4,228 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HowsMyTrain</title>
-<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#0c0c0d">
 <link rel="stylesheet" href="./styles.css">
 <script src="./common.js"></script>
-<style>
-  .banner {
-    background: var(--surface-1); border: 1px solid var(--border);
-    border-radius: 12px; padding: 14px 16px; margin-bottom: 20px;
-    color: var(--text-secondary); font-size: 13px; line-height: 1.55;
-  }
-  .table-scroll { overflow-x: auto; }
-</style>
 </head>
 <body>
+<div class="page">
   <div id="nav-slot"></div>
 
-  <main class="page" id="main" tabindex="-1">
-    <div class="page-head">
-      <div class="eyebrow">Indian Railways · punctuality tracker</div>
-      <h1>How late is my train?</h1>
-      <div class="meta" id="last-updated" role="status" aria-live="polite">Loading…</div>
-    </div>
+  <main id="main" tabindex="-1">
+    <div id="notice"></div>
 
-    <div class="banner hidden" id="config-banner">
-      <strong>Not configured yet.</strong> Set <code>SUPABASE_URL</code> and
-      <code>SUPABASE_ANON_KEY</code> at the top of the script in
-      <code>docs/index.html</code>. Both are safe to commit — the anon key is
-      public by design and row-level security restricts it to read-only.
-    </div>
+    <section class="hero-band" id="hero" aria-labelledby="hero-eyebrow">
+      <div>
+        <div class="hero-eyebrow" id="hero-eyebrow">HOW LATE IS MY TRAIN — TODAY</div>
+        <div class="hero-figure"><span class="v sk fig"></span></div>
+      </div>
+      <div class="hero-rail"><div class="sk line"></div></div>
+    </section>
 
-    <div class="hero" id="hero"></div>
-
-    <div class="card">
-      <div class="card-head">
-        <h2 id="fleet-heading">Tracked trains</h2>
+    <section class="band">
+      <div class="band-head">
+        <h2>Tracked trains</h2>
         <div class="toolbar">
-          <label class="check">
-            <input type="checkbox" id="today-only" checked>
-            Today only
-          </label>
-          <input type="search" id="filter" placeholder="Filter by number, name or destination…" aria-label="Filter trains">
+          <input class="search" id="filter" type="search"
+                 placeholder="FILTER BY NUMBER, NAME OR CODE" aria-label="Filter trains">
+          <div class="range" role="group" aria-label="Aggregation range">
+            <button type="button" data-range="today" aria-pressed="true">TODAY</button>
+            <button type="button" data-range="7d" aria-pressed="false">7 DAYS</button>
+            <button type="button" data-range="30d" aria-pressed="false">30 DAYS</button>
+          </div>
         </div>
       </div>
-      <div class="jrny-legend" id="fleet-legend"></div>
-      <div class="table-scroll" id="fleet-container"></div>
-    </div>
-
-    <details class="waiting">
-      <summary id="waiting-summary">Awaiting first data</summary>
-      <div class="waiting-body">
-        <p class="waiting-note">
-          Tracked and scheduled, but no usable journey recorded yet. A train
-          only produces a row when it's polled while actually running — so
-          sparse services (some run one day a week) can sit here for days.
-        </p>
-        <div class="table-scroll" id="waiting-container"></div>
+      <div class="states" id="states"></div>
+      <div class="reg" id="reg">
+        <div class="sk row"></div><div class="sk row"></div><div class="sk row"></div>
       </div>
-    </details>
+      <div id="awaiting"></div>
+    </section>
+
+    <section class="band raised" id="week-band">
+      <div class="band-head">
+        <h2>Weekly average delay</h2>
+        <span class="label">ALL TRACKED SERVICES · MIN</span>
+      </div>
+      <div id="week"></div>
+    </section>
   </main>
+</div>
 
 <script>
-// Supabase access, formatting and schedule helpers live in common.js.
+// Supabase access, the delay scale, formatting and schedule helpers all live
+// in common.js.
 
-let allTrains = [];      // train_summary rows that have at least one journey
-let waitingTrains = [];  // tracked but nothing recorded yet
-let historyBy = {};      // train_number -> [delay per journey_date, oldest first]
-let sortKey = "avg_delay_minutes";
-let sortDir = -1;        // worst-first is the useful default
-let stateFilter = null;  // null | "running" | "done" | "before" -- set by the legend
+const WINDOW_DAYS = 30;          // widest range the toggle offers
+const REFRESH_MS = 5 * 60 * 1000;
 
-// null/undefined always sink to the bottom regardless of direction -- "no
-// data" is not a value and shouldn't win either end of the sort.
-function sorted(list) {
-  return [...list].sort((a, b) => {
-    const x = a[sortKey], y = b[sortKey];
-    const xe = x === null || x === undefined, ye = y === null || y === undefined;
-    if (xe && ye) return 0;
-    if (xe) return 1;
-    if (ye) return -1;
-    if (typeof x === "string" || typeof y === "string") {
-      return String(x).localeCompare(String(y)) * sortDir;
-    }
-    return (x - y) * sortDir;
-  });
-}
+let summary = [];                // train_summary rows
+let byTrain = {};                // train_number -> { 'YYYY-MM-DD': delay }
+let range = "today";
+let stateFilter = null;          // null | 'running' | 'done' | 'before'
 
-// A real <button> inside the <th>: keyboard activation, focus ring and the
-// accessible role all come free, and aria-sort lives on the cell where
-// assistive tech expects it.
-function sortHeader(label, key, numeric) {
-  const active = sortKey === key;
-  const arrow = active ? (sortDir === 1 ? "↑" : "↓") : "";
-  const sort = active ? (sortDir === 1 ? "ascending" : "descending") : "none";
-  return `<th class="${numeric ? "num " : ""}sortable${active ? " active" : ""}" aria-sort="${sort}">
-    <button type="button" class="sort-btn" data-key="${key}" data-numeric="${numeric ? 1 : 0}">
-      ${label}<span class="sort-arrow" aria-hidden="true">${arrow}</span>
-    </button></th>`;
-}
+const todayKey = () => isoDate(new Date());
 
-function wireSort(container) {
-  container.querySelectorAll("button.sort-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const key = btn.dataset.key;
-      // Re-clicking a column flips it; a new column starts descending for
-      // numbers (worst first) and ascending for text.
-      if (sortKey === key) sortDir = -sortDir;
-      else { sortKey = key; sortDir = btn.dataset.numeric === "1" ? -1 : 1; }
-      applyFilter();
-    });
-  });
-}
-
-function renderHero(trains) {
-  const withData = trains.filter(t => t.journeys_observed > 0);
-  const delays = withData.map(t => t.avg_delay_minutes).filter(v => v !== null);
-  const journeys = trains.reduce((a, t) => a + (t.journeys_observed || 0), 0);
-  const fleetAvg = delays.length ? Math.round(delays.reduce((a, b) => a + b, 0) / delays.length) : null;
-  const onTime = withData.filter(t => (t.avg_delay_minutes ?? 99) <= 10).length;
-
-  const onTimePct = withData.length ? Math.round(100 * onTime / withData.length) : null;
-
-  // Each hero cell gets a categorical hue in fixed order (identity of the
-  // measure), except the two that carry a judgement -- those wear status ink.
-  const stats = [
-    ["Trains tracked", trains.length, "", `${withData.length} with data so far`,
-      "--series-1", ""],
-    ["Journeys recorded", journeys, "", journeys ? "one per train per day" : "waiting on first poll",
-      "--series-7", ""],
-    ["Fleet average", fleetAvg === null ? "–" : fleetAvg, fleetAvg === null ? "" : "min",
-      "across trains with data", "--series-2", fleetAvg === null ? "" : band(fleetAvg).cls],
-    ["Running on time", onTimePct === null ? "–" : onTimePct, onTimePct === null ? "" : "%",
-      "average delay ≤ 10 min", "--series-3",
-      onTimePct === null ? "" : (onTimePct >= 70 ? "good" : onTimePct >= 40 ? "warn" : "bad")],
-  ];
-
-  document.getElementById("hero").innerHTML = stats.map(([k, v, unit, d, hue, tone]) => `
-    <div class="stat" style="--accent: var(${hue})">
-      <div class="k">${k}</div>
-      <div class="v ${tone}">${v}${unit ? `<span class="unit">${unit}</span>` : ""}</div>
-      <div class="d">${d}</div>
-    </div>`).join("");
-}
-
-function renderWaiting(trains, todayOnly) {
-  document.getElementById("waiting-summary").textContent =
-    `Awaiting first data — ${trains.length} train${trains.length === 1 ? "" : "s"}${todayOnly ? " scheduled today" : ""}`;
-
-  const container = document.getElementById("waiting-container");
-  if (!trains.length) {
-    container.innerHTML = `<div class="empty-state">${
-      todayOnly ? "Every train scheduled today has recorded a journey."
-                : "Every tracked train has recorded at least one journey."
-    }</div>`;
-    return;
+/** The last N calendar dates ending today, oldest first. */
+function lastDays(n) {
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    out.push(isoDate(d));
   }
-  container.innerHTML = `
-    <table class="fleet tabular">
-      <thead><tr>
-        <th>Train</th><th>Route &amp; time</th><th>Runs on</th><th>Last checked</th>
-      </tr></thead>
-      <tbody>${trains.map(t => {
-        const j = journeyState(t);
-        const href = `./train.html?train=${encodeURIComponent(t.train_number)}`;
-        return `
-        <tr data-href="${href}"${j ? ` class="j-${j.key}"` : ""}>
-          <td class="cell-train">
-            <a href="${href}" class="t-num">${esc(t.train_number)}</a>
-            <span class="t-name">${esc(t.name || "—")}</span>
-          </td>
-          ${scheduleCell(t, j)}
-          <td data-label="Runs on">${runDaysDots(t.run_days)}</td>
-          <td class="dim" data-label="Last checked">${t.updated_at ? new Date(t.updated_at).toLocaleDateString() : "never"}</td>
-        </tr>`;
-      }).join("")}</tbody>
-    </table>`;
-  wireRows(container);
+  return out;
 }
 
-// The swatches are also the key: a colour on a row means nothing until this
-// says what it means. Empty (and hidden) when nothing is running today.
+const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+
+// ---------------------------------------------------------------------------
+// Rows for the selected range
 //
-// They double as the journey-state filter -- clicking one narrows the table to
-// those trains, clicking it again clears it. Counts are of the search/today
-// scope only, never of the state selection, so the other two stay reachable
-// instead of collapsing to zero once one is picked.
-function renderLegend(rows) {
-  const counts = { running: 0, done: 0, before: 0 };
-  for (const t of rows) {
-    const j = journeyState(t);
-    if (j) counts[j.key]++;
-  }
-  const legend = document.getElementById("fleet-legend");
-  legend.innerHTML =
-    counts.running + counts.done + counts.before === 0 ? "" :
-    ["running", "done", "before"].map(k => `
-      <button type="button" class="jl ${k}" data-state="${k}"
-              aria-pressed="${stateFilter === k}">
-        <i aria-hidden="true"></i>${counts[k]} ${JOURNEY_STATES[k].toLowerCase()}
-      </button>`
-    ).join("");
+// TODAY keeps every service scheduled to arrive today even before its poll
+// lands -- a train that hasn't reported yet is a different fact from one that
+// isn't running, and collapsing the two is what makes a sparse dashboard lie.
+// The wider ranges show only what was actually observed.
+// ---------------------------------------------------------------------------
+function rowsFor(range) {
+  const window = range === "today" ? [todayKey()] : lastDays(range === "7d" ? 7 : 30);
+  const now = new Date();
 
-  legend.querySelectorAll("button.jl").forEach(btn => {
+  return summary.map(t => {
+    const hist = byTrain[t.train_number] || {};
+    const seen = window.map(d => hist[d]).filter(v => v !== null && v !== undefined);
+    const delay = range === "today" ? (seen.length ? seen[seen.length - 1] : null)
+                                    : (seen.length ? Math.round(mean(seen)) : null);
+    return { t, delay, observed: seen.length, state: journeyState(t, now) };
+  }).filter(r =>
+    range === "today"
+      ? r.t.journeys_observed > 0 && arrivesOn(r.t, now)
+      : r.observed > 0
+  ).sort((a, b) => {
+    // Worst first; a service still awaiting today's poll sinks to the bottom
+    // rather than posing as punctual.
+    if (a.delay === null) return b.delay === null ? 0 : 1;
+    if (b.delay === null) return -1;
+    return b.delay - a.delay;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Hero -- always today, whatever the list is aggregating
+// ---------------------------------------------------------------------------
+function renderHero() {
+  const today = todayKey();
+  const todayDelay = (t) => (byTrain[t.train_number] || {})[today];
+  const scheduled = summary.filter(t => arrivesOn(t, new Date()));
+  const observed = scheduled
+    .map(t => ({ t, delay: todayDelay(t) }))
+    .filter(x => x.delay !== null && x.delay !== undefined);
+
+  const avg = observed.length ? Math.round(mean(observed.map(x => x.delay))) : null;
+  const onTime = observed.filter(x => band(x.delay).cls === "good").length;
+  const worst = observed.reduce((w, x) => (w && w.delay >= x.delay ? w : x), null);
+
+  // Same-day comparison against the trailing week, excluding today so the
+  // baseline isn't partly the number it's being compared with.
+  const prior = lastDays(8).slice(0, 7)
+    .flatMap(d => summary.map(t => (byTrain[t.train_number] || {})[d]))
+    .filter(v => v !== null && v !== undefined);
+  const weekAvg = prior.length ? mean(prior) : null;
+  const delta = avg !== null && weekAvg !== null ? Math.round(avg - weekAvg) : null;
+
+  const note = !observed.length
+    ? "Not enough data yet — the weekly view needs a few days of polling."
+    : [
+        `Across ${observed.length} tracked service${observed.length === 1 ? "" : "s"} polled since midnight.`,
+        // "On time" is the DB's <= 10 min rule, so don't claim "to the minute".
+        onTime ? `${onTime} ran on time.` : null,
+        worst && worst.delay > 120 ? "One is over two hours down." : null,
+      ].filter(Boolean).join(" ");
+
+  document.getElementById("hero").innerHTML = `
+    <div>
+      <div class="hero-eyebrow" id="hero-eyebrow">HOW LATE IS MY TRAIN — TODAY</div>
+      <div class="hero-figure">
+        <span class="v">${avg === null ? "—" : avg}</span>
+        ${avg === null ? "" : `<span class="u">min late, on average</span>`}
+      </div>
+      <p class="hero-note">${esc(note)}</p>
+    </div>
+    <div class="hero-rail">
+      <div class="rail-row lead">
+        <span class="k">ON TIME</span>
+        <span class="v">${observed.length ? `${onTime} / ${observed.length}` : "—"}</span>
+      </div>
+      <div class="strip" role="img"
+           aria-label="${observed.length ? `${onTime} of ${observed.length} services on time today` : "No services polled yet today"}">
+        ${scheduled.map(t => {
+          const d = todayDelay(t);
+          return `<i class="${d !== null && d !== undefined && band(d).cls === "good" ? "on" : ""}"></i>`;
+        }).join("")}
+      </div>
+      <div class="rail-row spaced">
+        <span class="k">WORST TODAY</span>
+        <span class="v" style="color:${worst ? scaleOf(worst.delay) : "var(--text-3)"}">
+          ${worst ? `${esc(worst.t.train_number)} · ${fmtDelay(worst.delay)}` : "—"}</span>
+      </div>
+      <div class="rail-row">
+        <span class="k">VS 7-DAY AVG</span>
+        <span class="v" style="color:${delta === null ? "var(--text-3)" : delta <= 0 ? "var(--ontime)" : "var(--severe)"}">
+          ${delta === null ? "—" : `${delta <= 0 ? "−" : "+"}${Math.abs(delta)} min`}</span>
+      </div>
+      <div class="rail-row">
+        <span class="k">POLLED</span>
+        <span class="v">${observed.length} of ${scheduled.length}</span>
+      </div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Register
+// ---------------------------------------------------------------------------
+
+/**
+ * Seven fixed slots ending today. A day the service didn't run keeps its slot
+ * as a floor tick: dropping it would slide the other six along and quietly
+ * describe a different week.
+ */
+function sparkbars(trainNo) {
+  const hist = byTrain[trainNo] || {};
+  const week = lastDays(7).map(d => hist[d]);
+  const max = Math.max(...week.filter(v => v != null), 1);
+  return `<span class="spark" aria-hidden="true">${week.map(v =>
+    v === null || v === undefined
+      ? `<i class="gap"></i>`
+      : `<i style="height:${Math.max(6, Math.round(100 * v / max))}%;--bar:${scaleOf(v)}"></i>`
+  ).join("")}</span>`;
+}
+
+const STATE_LABEL = { running: "EN ROUTE", done: "COMPLETED", before: "NOT STARTED" };
+
+/**
+ * Journey-state filter.
+ *
+ * Counts come from the pre-state scope, never from the state selection, so
+ * picking one doesn't collapse the other two to zero and strand you there.
+ * Only rendered for TODAY: journeyState() is null for anything not running
+ * today, so in the wider ranges every count would be zero.
+ */
+function renderStates(rows) {
+  const el = document.getElementById("states");
+  if (range !== "today") { el.innerHTML = ""; return; }
+
+  const counts = { running: 0, done: 0, before: 0 };
+  for (const r of rows) if (r.state) counts[r.state.key]++;
+
+  el.innerHTML = counts.running + counts.done + counts.before === 0 ? "" :
+    ["running", "done", "before"].map(k => `
+      <button type="button" class="${k}" data-state="${k}"
+              aria-pressed="${stateFilter === k}">
+        <i aria-hidden="true"></i>${counts[k]} ${STATE_LABEL[k]}
+      </button>`).join("");
+
+  el.querySelectorAll("button").forEach(btn => {
     btn.addEventListener("click", () => {
       stateFilter = stateFilter === btn.dataset.state ? null : btn.dataset.state;
       applyFilter();
@@ -213,122 +233,186 @@ function renderLegend(rows) {
   });
 }
 
-function renderFleet(trains) {
-  const container = document.getElementById("fleet-container");
-  if (!trains.length) {
-    container.innerHTML = `<div class="empty-state">${
-      allTrains.length
-        ? "No trains match that filter."
-        : "No journeys recorded yet — every tracked train is in the list below."
+function renderRows(rows) {
+  const reg = document.getElementById("reg");
+  if (!rows.length) {
+    reg.innerHTML = `<div class="empty-state">${
+      summary.length
+        ? "No tracked service matches that filter for this range."
+        : "No journeys recorded yet — every tracked service is listed below."
     }</div>`;
     return;
   }
-  container.innerHTML = `
-    <table class="fleet tabular">
-      <thead><tr>
-        ${sortHeader("Train", "train_number", false)}
-        ${sortHeader("Route &amp; time", "scheduled_arrival", false)}
-        <th>Runs on</th>
-        ${sortHeader("Avg delay", "avg_delay_minutes", true)}
-        <th>Trend</th>
-        ${sortHeader("On time", "on_time_pct", true)}
-        ${sortHeader("Days", "journeys_observed", true)}
-      </tr></thead>
-      <tbody>${trains.map(t => {
-        const b = band(t.avg_delay_minutes);
-        const j = journeyState(t);
-        const href = `./train.html?train=${encodeURIComponent(t.train_number)}`;
-        return `
-        <tr data-href="${href}"${j ? ` class="j-${j.key}"` : ""}>
-          <td class="cell-train">
-            <a href="${href}" class="t-num">${esc(t.train_number)}</a>
-            <span class="t-name">${esc(t.name || "—")}</span>
-          </td>
-          ${scheduleCell(t, j)}
-          <td data-label="Runs on">${runDaysDots(t.run_days)}</td>
-          <td class="num ${t.avg_delay_minutes === null ? "" : "d-" + b.cls}" data-label="Avg delay" title="${b.text}">${t.avg_delay_minutes === null ? '<span class="dim">–</span>' : Math.round(t.avg_delay_minutes) + " min"}</td>
-          <td data-label="Trend" class="spark-cell ${b.cls}">${sparkline(historyBy[t.train_number] || [])}</td>
-          <td class="num" data-label="On time">${t.on_time_pct === null ? '<span class="dim">–</span>' : t.on_time_pct + "%"}</td>
-          <td class="num" data-label="Days">${t.journeys_observed}</td>
-        </tr>`;
-      }).join("")}</tbody>
-    </table>`;
-  wireRows(container);
-  wireSort(container);
+
+  const multi = range !== "today";
+  reg.innerHTML = `
+    <div class="reg-head" aria-hidden="true">
+      <span>NO.</span><span>SERVICE</span><span>ROUTE &amp; TIMETABLE</span>
+      <span style="text-align:right">${multi ? "AVG ARR" : "ACTUAL"}</span>
+      <span style="text-align:right">${multi ? "AVG DELAY" : "DELAY"}</span>
+      <span style="text-align:right">LAST 7 DAYS</span>
+    </div>
+    ${rows.map(({ t, delay, observed, state }) => {
+      const actual = delay === null ? "—" : shiftTime(t.scheduled_arrival, delay);
+      const meta = multi
+        ? `${observed} RUN${observed === 1 ? "" : "S"}`
+        : (state ? STATE_LABEL[state.key] : "NOT RUNNING TODAY");
+
+      return `
+      <a class="reg-row" href="./train.html?train=${encodeURIComponent(t.train_number)}"
+         style="--scale:${scaleOf(delay)}">
+        <span class="r-no">${esc(t.train_number)}</span>
+        <span class="r-svc">
+          <span class="r-name">${esc(t.name || "—")}</span>
+          <span class="r-meta">${meta}</span>
+        </span>
+        <span class="r-sched cell-sched">${scheduleStack(t, multi ? null : state)}</span>
+        <span class="r-actual">${actual}</span>
+        <span class="r-delay ${delay === null ? "none" : delay <= 0 ? "zero" : ""}"
+              title="${multi ? `Mean of ${observed} observed journeys` : band(delay).text}">${fmtDelay(delay)}</span>
+        ${sparkbars(t.train_number)}
+      </a>`;
+    }).join("")}`;
 }
+
+function renderAwaiting() {
+  // Never-observed services only. A train that ran yesterday but hasn't been
+  // polled today is not "awaiting first data" -- it's in the list above with
+  // an empty delay, which is the honest place for it.
+  const waiting = summary.filter(t => !t.journeys_observed);
+  const el = document.getElementById("awaiting");
+  if (!waiting.length) { el.innerHTML = ""; return; }
+
+  el.innerHTML = `
+    <div class="awaiting">
+      <div>
+        <h3>Awaiting first data</h3>
+        <div class="count">${waiting.length} SERVICE${waiting.length === 1 ? "" : "S"}</div>
+      </div>
+      <div>
+        <p>Tracked and scheduled, but no usable journey recorded yet. A train
+        only produces a row when it's polled while actually running — sparse
+        services can sit here for days.</p>
+        <div class="chips">${waiting.map(t => `
+          <a class="chip" href="./train.html?train=${encodeURIComponent(t.train_number)}"
+            >${esc(t.train_number)} · ${esc(runDaysText(t.run_days))}</a>`).join("")}</div>
+      </div>
+    </div>`;
+}
+
+function renderWeek() {
+  const days = lastDays(7);
+  const today = todayKey();
+  const vals = days.map(d => {
+    const xs = summary.map(t => (byTrain[t.train_number] || {})[d])
+                      .filter(v => v !== null && v !== undefined);
+    return xs.length ? Math.round(mean(xs)) : null;
+  });
+
+  if (!vals.some(v => v !== null)) {
+    document.getElementById("week").innerHTML =
+      `<div class="empty-state">Not enough data yet — the weekly view needs a few days of polling.</div>`;
+    return;
+  }
+
+  const max = Math.max(...vals.filter(v => v !== null), 1);
+  const worst = Math.max(...vals.filter(v => v !== null));
+
+  document.getElementById("week").innerHTML = `
+    <div class="week bars">${days.map((d, i) => {
+      const v = vals[i];
+      const cls = d === today ? "today" : v !== null && v === worst ? "worst" : "";
+      return `<div class="${cls}">
+        <span>${v === null ? "—" : v}</span>
+        <i style="height:${v === null ? 0 : Math.max(2, Math.round(100 * v / max))}%"></i>
+      </div>`;
+    }).join("")}</div>
+    <div class="week days">${days.map(d => {
+      const isToday = d === today;
+      const name = new Date(d + "T12:00").toLocaleDateString("en-GB", { weekday: "short" }).toUpperCase();
+      return `<span class="${isToday ? "today" : ""}">${isToday ? "TODAY" : name}</span>`;
+    }).join("")}</div>`;
+}
+
+// ---------------------------------------------------------------------------
 
 function applyFilter() {
   const q = document.getElementById("filter").value.trim().toLowerCase();
-  const todayOnly = document.getElementById("today-only").checked;
-  const today = new Date();
+  const scoped = rowsFor(range).filter(({ t }) =>
+    !q || [t.train_number, t.name, t.source_code, t.destination_code]
+      .some(v => String(v ?? "").toLowerCase().includes(q)));
 
-  // arrivesOn() treats an unknown schedule as "yes" -- which is right here:
-  // the poller will check those trains too, precisely to learn their days.
-  const scoped = (list) => list.filter(t =>
-    (!todayOnly || arrivesOn(t, today)) &&
-    (!q || [t.train_number, t.name, t.source_code, t.destination_code]
-      .some(v => String(v ?? "").toLowerCase().includes(q)))
-  );
-
-  const fleet = scoped(allTrains);
-  const waiting = scoped(waitingTrains);
-
-  // Legend counts come from the pre-state scope, so picking one state doesn't
-  // zero out the other two and strand you there.
-  renderLegend([...fleet, ...waiting]);
-
-  // journeyState() is null for anything not running today, which is the right
-  // answer here: a train with no state today belongs to none of the three.
-  const byState = (list) =>
-    stateFilter ? list.filter(t => (journeyState(t) || {}).key === stateFilter) : list;
-  const shownFleet = byState(fleet);
-  const shownWaiting = byState(waiting);
-
-  document.getElementById("fleet-heading").textContent =
-    stateFilter ? `${JOURNEY_STATES[stateFilter]} — ${shownFleet.length + shownWaiting.length} trains`
-    : todayOnly ? `Scheduled today — ${fleet.length + waiting.length} trains`
-    : `All tracked trains — ${allTrains.length + waitingTrains.length}`;
-
-  renderFleet(sorted(shownFleet));
-  renderWaiting(shownWaiting, todayOnly);
+  // Tabs count the search scope, before the state selection is applied.
+  renderStates(scoped);
+  renderRows(stateFilter && range === "today"
+    ? scoped.filter(r => r.state && r.state.key === stateFilter)
+    : scoped);
 }
 
-async function main() {
+function notice(html, cls = "") {
+  document.getElementById("notice").innerHTML = `<div class="notice ${cls}">${html}</div>`;
+}
+
+async function load() {
   if (!configured()) {
-    document.getElementById("config-banner").classList.remove("hidden");
-    document.getElementById("last-updated").textContent = "Awaiting Supabase config";
+    notice(`<strong>Not configured yet.</strong> Set <code>SUPABASE_URL</code> and
+      <code>SUPABASE_ANON_KEY</code> at the top of <code>docs/common.js</code>. Both are
+      safe to commit — the anon key is public by design and row-level security
+      restricts it to read-only.`);
+    setPolled(null, "NOT CONFIGURED");
     return;
   }
+
+  const since = new Date();
+  since.setDate(since.getDate() - WINDOW_DAYS);
   try {
-    const [summary, history] = await Promise.all([
+    const [rows, hist, runs] = await Promise.all([
       sb("train_summary", "select=*&order=train_number"),
-      // Per-day delays drive the row sparklines. One small query -- the view
-      // already excludes not-started runs.
-      sb("daily_delays", "select=train_number,journey_date,delay_minutes&order=journey_date"),
+      sb("daily_delays",
+         `select=train_number,journey_date,delay_minutes&journey_date=gte.${isoDate(since)}&order=journey_date`),
+      // The heartbeat, not the last poll, says the scheduler is alive: most
+      // runs correctly find nothing due and write no poll row at all.
+      sb("poller_runs", "select=ran_at&order=ran_at.desc&limit=1").catch(() => []),
     ]);
 
-    historyBy = {};
-    for (const r of history) (historyBy[r.train_number] ||= []).push(r.delay_minutes);
+    summary = rows;
+    byTrain = {};
+    for (const r of hist) (byTrain[r.train_number] ||= {})[r.journey_date] = r.delay_minutes;
 
-    allTrains = summary.filter(t => t.journeys_observed > 0);
-    waitingTrains = summary.filter(t => !t.journeys_observed);
-
-    renderHero(summary);
-    applyFilter();   // renders both the fleet and the waiting list
-    document.getElementById("last-updated").textContent =
-      `${allTrains.length} of ${summary.length} trains reporting · updated ${new Date().toLocaleTimeString()}`;
+    document.getElementById("notice").innerHTML = "";
+    renderHero();
+    applyFilter();
+    renderAwaiting();
+    renderWeek();
+    setPolled(runs.length ? new Date(runs[0].ran_at) : null);
   } catch (err) {
     console.error(err);
-    document.getElementById("last-updated").textContent = "Failed to load: " + err.message;
+    // The table name is in the message sb() throws; showing it turns "failed
+    // to load" into something a maintainer can act on.
+    notice(`<strong>Couldn't reach the data.</strong> <code>${esc(err.message)}</code>
+      <br><button type="button" class="retry" id="retry">RETRY</button>`, "error");
+    document.getElementById("retry").addEventListener("click", load);
+    setPolled(null, "FETCH FAILED");
   }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("nav-slot").innerHTML = appbar("fleet");
-  setupTheme();
   document.getElementById("filter").addEventListener("input", applyFilter);
-  document.getElementById("today-only").addEventListener("change", applyFilter);
-  main();
+
+  document.querySelectorAll(".range button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      range = btn.dataset.range;
+      document.querySelectorAll(".range button").forEach(b =>
+        b.setAttribute("aria-pressed", String(b === btn)));
+      applyFilter();
+    });
+  });
+
+  load();
+  // The header carries the poll time so a stale view is never mistaken for a
+  // live one; refreshing on a timer is what keeps that stamp meaningful.
+  setInterval(load, REFRESH_MS);
 });
 </script>
 </body>

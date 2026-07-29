@@ -41,11 +41,58 @@ const SERIES_SLOTS = [
 const seriesColor = (i) => cssVar(SERIES_SLOTS[i % SERIES_SLOTS.length]);
 
 // Delay bands are status (good/bad), never identity -- they wear status tokens.
+// Thresholds match ON_TIME_THRESHOLD_MINUTES (10) in app/aggregate.py and the
+// `on_time` expression in supabase/schema.sql, so a train counted as on time
+// here is on time everywhere.
 function band(m) {
   if (m === null || m === undefined) return { cls: "idle", text: "No data" };
   if (m <= 10) return { cls: "good", text: "On time" };
   if (m <= 30) return { cls: "warn", text: "Slight delay" };
   return { cls: "bad", text: "Late" };
+}
+
+// ---- Delay scale ----------------------------------------------------------
+// Four steps sharing lightness and chroma, differing only in hue, so no step
+// shouts louder than the others. This is magnitude, not the on-time verdict:
+// the on-time *count* still comes from band() above and the DB's <= 10 rule.
+const DELAY_SCALE = [
+  [5, "var(--ontime)"],
+  [20, "var(--minor)"],
+  [60, "var(--late)"],
+  [Infinity, "var(--severe)"],
+];
+
+/** CSS colour for a delay, for `style="--scale: ..."` on a row. */
+function scaleOf(m) {
+  if (m === null || m === undefined) return "var(--text-3)";
+  return DELAY_SCALE.find(([cap]) => m <= cap)[1];
+}
+
+/**
+ * "+42" under an hour, "+2:18" at or above it, and the word ON TIME instead of
+ * "+0" -- a zero here is a fact worth reading, not a number worth scanning.
+ * Early arrivals fold into ON TIME; there is no "-3 min late".
+ */
+function fmtDelay(m) {
+  if (m === null || m === undefined) return "—";
+  if (m <= 0) return "ON TIME";
+  if (m < 60) return `+${m}`;
+  return `+${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+}
+
+/** Scheduled clock time shifted by a delay, as the arrival actually observed. */
+function shiftTime(clock, minutes) {
+  if (!clock) return "–";
+  const [h, m] = String(clock).split(":").map(Number);
+  const t = ((h * 60 + m + Math.round(minutes || 0)) % 1440 + 1440) % 1440;
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
+/** The poller and every schedule in the DB are IST; say so rather than imply it. */
+function istTime(d) {
+  return d.toLocaleTimeString("en-GB", {
+    timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
 }
 
 // ---- Schedule ------------------------------------------------------------
@@ -111,20 +158,31 @@ function journeyState(t, now = new Date()) {
 function runDaysDots(days) {
   if (!days || !days.length) return '<span class="dim">unknown</span>';
   const set = new Set(days);
-  const title = days.length === 7 ? "Daily" : days.join(", ");
-  return `<span class="days" title="${title}" aria-label="Runs ${title}">` +
+  const title = runDaysText(days);
+  return `<span class="days-dots" title="${title}" aria-label="Runs ${title}">` +
     WEEK.map(d => `<i class="${set.has(d) ? "on" : ""}">${DAY_INITIAL[d]}</i>`).join("") +
     `</span>`;
 }
 
+/** The same fact as prose, for the chips in the awaiting-data block. */
+function runDaysText(days) {
+  if (!days || !days.length) return "schedule unknown";
+  if (days.length === 7) return "daily";
+  const cap = (d) => d[0].toUpperCase() + d.slice(1);
+  return "runs " + WEEK.filter(d => days.includes(d)).map(cap).join(", ");
+}
+
 /**
- * Route and timing as one cell (returns the whole <td>).
+ * Route over departure/arrival times, as one stacked block.
  *
  * These were two columns, which was what tipped the fleet table into
  * horizontal scrolling -- and "NDLS → LKO" and "16:10 → 22:30" are one fact
  * read together anyway, so stacking them costs nothing and saves a column.
+ *
+ * Returns the inner markup, so the register's grid rows and the tables on the
+ * other pages can share it; scheduleCell() below wraps it in a <td>.
  */
-function scheduleCell(t, j = journeyState(t)) {
+function scheduleStack(t, j = journeyState(t)) {
   const route = (t.source_code || t.destination_code)
     ? `${esc(t.source_code || "?")}<span class="arrow">→</span>${esc(t.destination_code || "?")}`
     : '<span class="dim">unknown</span>';
@@ -139,25 +197,14 @@ function scheduleCell(t, j = journeyState(t)) {
       + (t.arrival_day_offset ? `<sup class="plus">+${t.arrival_day_offset}</sup>` : "")
     : "";
   // One wrapper span so the mobile card layout sees a single flex item.
-  return `<td class="cell-sched" data-label="Route"><span class="stack"
-    ><span class="r">${route}</span><span class="t">${timing}</span></span></td>`;
+  return `<span class="stack"><span class="r">${route}</span><span class="t">${timing}</span></span>`;
+}
+
+function scheduleCell(t, j = journeyState(t)) {
+  return `<td class="cell-sched" data-label="Route">${scheduleStack(t, j)}</td>`;
 }
 
 // ---- Chrome ---------------------------------------------------------------
-
-/** Seeded from the OS preference, else the first click is a no-op in dark mode. */
-function setupTheme(onChange) {
-  const toggle = document.getElementById("theme-toggle");
-  if (!toggle) return;
-  let dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
-  toggle.addEventListener("click", () => {
-    dark = !dark;
-    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-    toggle.textContent = dark ? "☀️ Light" : "🌙 Dark";
-    if (onChange) onChange();
-  });
-}
 
 /** Whole row clickable; the inner link stays real for keyboard/middle-click. */
 function wireRows(container) {
@@ -169,21 +216,55 @@ function wireRows(container) {
   });
 }
 
+/**
+ * The register's header band: wordmark, section nav, and the poll clock.
+ *
+ * The clock is filled in by setPolled() rather than here, because a stale view
+ * that looks live is the one failure this page cannot afford -- so the slot
+ * exists on every page and stays visibly empty until real data arrives.
+ */
 function appbar(current) {
   // Skip link first so it's the first tab stop on the page.
   return `
   <a class="skip-link" href="#main">Skip to content</a>
-  <div class="appbar">
-    <div class="appbar-inner">
-      <a class="brand" href="./index.html" translate="no"><span class="mark" aria-hidden="true">🚆</span>HowsMyTrain</a>
-      <nav class="nav" aria-label="Main">
-        <a href="./index.html"${current === "fleet" ? ' aria-current="page"' : ""}>Fleet</a>
-        <a href="./health.html"${current === "health" ? ' aria-current="page"' : ""}>Health</a>
-        <a href="./db.html"${current === "db" ? ' aria-current="page"' : ""}>Raw Data</a>
-        <button id="theme-toggle" type="button">🌙 Dark</button>
-      </nav>
+  <header class="topbar">
+    <a class="brand" href="./index.html" translate="no">
+      <span class="wordmark">HowsMyTrain</span>
+      <span class="tagline">INDIAN RAILWAYS · PUNCTUALITY</span>
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="./index.html"${current === "fleet" ? ' aria-current="page"' : ""}>Fleet</a>
+      <a href="./health.html"${current === "health" ? ' aria-current="page"' : ""}>Health</a>
+      <a href="./db.html"${current === "db" ? ' aria-current="page"' : ""}>Raw data</a>
+    </nav>
+    <div class="polled" id="polled" role="status" aria-live="polite">
+      <i aria-hidden="true"></i><span>—</span>
     </div>
-  </div>`;
+  </header>`;
+}
+
+/**
+ * Show when the pipeline last ran. The dot goes amber then coral as the gap
+ * widens: the cron fires every 15 minutes, so an hour of silence is a fault
+ * and the page should say so rather than keep showing a confident figure.
+ *
+ * `neutral` turns that judgement off, for pages where the stamp is one train's
+ * last sighting rather than the fleet's heartbeat -- a train polled at its
+ * arrival and not since is working exactly as intended, and colouring that
+ * coral would cry wolf on every train page after breakfast.
+ */
+function setPolled(at, label, neutral) {
+  const el = document.getElementById("polled");
+  if (!el) return;
+  if (!at) {
+    el.className = "polled dead";
+    el.querySelector("span").textContent = label || "NO DATA";
+    return;
+  }
+  const mins = (Date.now() - at.getTime()) / 6e4;
+  el.className = "polled" +
+    (neutral ? " muted" : mins > 120 ? " dead" : mins > 45 ? " stale" : "");
+  el.querySelector("span").textContent = label || `POLLED ${istTime(at)} IST`;
 }
 
 /** Non-breaking space before the unit so "59 min" never wraps mid-value. */

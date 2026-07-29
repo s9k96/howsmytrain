@@ -1,118 +1,164 @@
-/* HowsMyTrain -- dashboard styles.
-   Palette + roles follow the project's dataviz conventions: categorical hues
-   in fixed order, text always in ink tokens (never series color), hairline
-   recessive gridlines.
+/* HowsMyTrain -- departure-board register.
+   Implements design_handoff_punctuality_dashboard, option 1a ("Ledger").
 
-   Token names are load-bearing: the charts read --series-*, --gridline,
-   --surface-1 and --text-* at runtime via getComputedStyle. Rename with care. */
+   Two typefaces with fixed jobs: Archivo for names and prose, IBM Plex Mono
+   for every number, code, timestamp and all-caps label, so minutes align down
+   a column. Separation comes from hairlines and surface steps -- there are no
+   shadows and no card borders inside the dark shell.
+
+   The delay scale is the only chromatic element on the page. Its four steps
+   share lightness and chroma and differ only in hue, so no step shouts louder
+   than the others.
+
+   Token names are load-bearing: train.html's charts read --series-1,
+   --gridline, --surface-1 and --text-* at runtime via getComputedStyle, which
+   returns the *specified* value for an unregistered custom property -- so the
+   legacy aliases below must hold literal colours, never var() references. */
 
 /* Self-hosted so the page has no external dependency and renders identically
-   offline. Variable weight 400-800 in one 48KB file. */
+   offline. Latin subsets only; Archivo ships as one variable file. */
 @font-face {
-  font-family: "Inter";
+  font-family: "Archivo";
   font-style: normal;
-  font-weight: 400 800;
+  font-weight: 400 700;
   font-display: swap;
-  src: url("./vendor/inter-latin.woff2") format("woff2");
+  src: url("./vendor/archivo-latin.woff2") format("woff2");
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
-                 U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC,
-                 U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+                 U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+                 U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./vendor/plexmono-400-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+                 U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+                 U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./vendor/plexmono-500-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+                 U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+                 U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./vendor/plexmono-600-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+                 U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122,
+                 U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 :root {
-  color-scheme: light;
-  --surface-1: #fcfcfb;
-  --surface-2: #f4f4f1;          /* recessed: table headers, inset rows */
-  --page-plane: #f9f9f7;
-  --text-primary: #0b0b0b;
-  --text-secondary: #52514e;
-  --text-muted: #898781;
-  --gridline: #e1e0d9;
-  --baseline: #c3c2b7;
-  --border: rgba(11, 11, 11, 0.10);
-  --success-text: #006300;
-  --shadow: 0 1px 2px rgba(11, 11, 11, 0.04), 0 4px 12px rgba(11, 11, 11, 0.03);
-  --hover-tint: rgba(11, 11, 11, 0.025);
-
-  --series-1: #2a78d6; /* blue */
-  --series-2: #eb6834; /* orange */
-  --series-3: #1baf7a; /* aqua */
-  --series-4: #eda100; /* yellow */
-  --series-5: #e87ba4; /* magenta */
-  --series-6: #008300; /* green */
-  --series-7: #4a3aa7; /* violet */
-  --series-8: #e34948; /* red */
-
-  --status-good: #0ca30c;
-  --status-warning: #fab219;
-  --status-serious: #ec835a;
-  --status-critical: #d03b3b;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
-    color-scheme: dark;
-    --surface-1: #1a1a19;
-    --surface-2: #222221;
-    --page-plane: #0d0d0d;
-    --text-primary: #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted: #898781;
-    --gridline: #2c2c2a;
-    --baseline: #383835;
-    --border: rgba(255, 255, 255, 0.10);
-    --success-text: #0ca30c;
-    --shadow: none;
-    --hover-tint: rgba(255, 255, 255, 0.035);
-
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --series-3: #199e70;
-    --series-4: #c98500;
-    --series-5: #d55181;
-    --series-6: #008300;
-    --series-7: #9085e9;
-    --series-8: #e66767;
-  }
-}
-:root[data-theme="dark"] {
   color-scheme: dark;
-  --surface-1: #1a1a19;
-  --surface-2: #222221;
-  --page-plane: #0d0d0d;
-  --text-primary: #ffffff;
-  --text-secondary: #c3c2b7;
-  --text-muted: #898781;
-  --gridline: #2c2c2a;
-  --baseline: #383835;
-  --border: rgba(255, 255, 255, 0.10);
-  --success-text: #0ca30c;
-  --shadow: none;
-  --hover-tint: rgba(255, 255, 255, 0.035);
 
-  --series-1: #3987e5;
-  --series-2: #d95926;
-  --series-3: #199e70;
-  --series-4: #c98500;
-  --series-5: #d55181;
-  --series-6: #008300;
-  --series-7: #9085e9;
-  --series-8: #e66767;
+  --bg: #0c0c0d;
+  --bg-raised: #101011;
+  --surface: #141415;
+
+  --text: #f4f2ee;
+  --text-2: rgba(244, 242, 238, 0.50);
+  --text-3: rgba(244, 242, 238, 0.36);
+  --text-label: rgba(244, 242, 238, 0.40);
+
+  --hairline: rgba(244, 242, 238, 0.09);
+  --border-card: rgba(244, 242, 238, 0.08);
+  --border-dashed: rgba(244, 242, 238, 0.16);
+  --track: rgba(244, 242, 238, 0.07);
+  --bar-neutral: rgba(244, 242, 238, 0.16);
+  --bar-neutral-strong: rgba(244, 242, 238, 0.30);
+  --chip: rgba(244, 242, 238, 0.06);
+
+  /* Delay scale. Source of truth; the hex block below is only a fallback. */
+  --ontime: oklch(0.78 0.15 150);
+  --minor: oklch(0.85 0.13 100);
+  --late: oklch(0.80 0.14 70);
+  --severe: oklch(0.68 0.17 25);
+
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo,
+          Consolas, monospace;
+  --sans: "Archivo", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* ---- Legacy aliases -------------------------------------------------
+     Kept so train/health/db and the Chart.js config keep working unchanged.
+     Literal values on purpose (see the note at the top of this file). */
+  --surface-1: #141415;
+  --surface-2: #1b1b1c;
+  --page-plane: #0c0c0d;
+  --text-primary: #f4f2ee;
+  --text-secondary: rgba(244, 242, 238, 0.50);
+  --text-muted: rgba(244, 242, 238, 0.36);
+  --gridline: rgba(244, 242, 238, 0.09);
+  --baseline: rgba(244, 242, 238, 0.28);
+  --border: rgba(244, 242, 238, 0.08);
+  --shadow: none;
+  --hover-tint: rgba(244, 242, 238, 0.03);
+  --success-text: #67d283;
+
+  --status-good: oklch(0.78 0.15 150);
+  --status-warning: oklch(0.85 0.13 100);
+  --status-serious: oklch(0.80 0.14 70);
+  --status-critical: oklch(0.68 0.17 25);
+
+  /* Charts. Single-series plots take the ink; the rest exist only so an
+     eight-series chart can still be drawn without inventing colours. */
+  --series-1: #f4f2ee;
+  --series-2: #f7ac4d;
+  --series-3: #67d283;
+  --series-4: #e2d064;
+  --series-5: #ef6661;
+  --series-6: #8fb8d8;
+  --series-7: #b6a3e0;
+  --series-8: #8d8b86;
+}
+
+/* A browser without oklch would drop every scale colour to `unset` and the
+   page would lose all severity signal at once, so the fallback is worth its
+   four lines. Values converted from the oklch source, not eyeballed. */
+@supports not (color: oklch(0.78 0.15 150)) {
+  :root {
+    --ontime: #67d283;  --status-good: #67d283;
+    --minor: #e2d064;   --status-warning: #e2d064;
+    --late: #f7ac4d;    --status-serious: #f7ac4d;
+    --severe: #ef6661;  --status-critical: #ef6661;
+  }
 }
 
 * { box-sizing: border-box; }
 
-/* Keyboard users reach content without tabbing the whole nav. Visible only
-   when focused. */
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Keyboard users reach content without tabbing the whole nav. */
 .skip-link {
   position: absolute;
   left: 12px;
   top: -60px;
   z-index: 50;
-  background: var(--surface-1);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-dashed);
+  border-radius: 4px;
   padding: 10px 16px;
   font-size: 13px;
   font-weight: 600;
@@ -121,209 +167,592 @@
 }
 
 .skip-link:focus { top: 12px; }
-
 #main:focus { outline: none; }   /* programmatic target, not a control */
 
-/* Removes the 300ms double-tap delay; keeps the tap flash intentional. */
 a, button, label, summary, [role="button"] {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 
-body {
-  margin: 0;
-  font-family: "Inter", "Segoe UI Variable Text", system-ui, -apple-system,
-               "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-  /* A very slight wash behind the page, so cards read as raised rather than
-     as boxes drawn on flat grey. */
-  background:
-    radial-gradient(1200px 600px at 50% -200px,
-      color-mix(in srgb, var(--series-1) 6%, transparent), transparent 70%),
-    var(--page-plane);
-  background-attachment: fixed;
-  color: var(--text-primary);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  font-feature-settings: "cv05" 1, "ss03" 1;   /* Inter: single-storey l, curved r */
+a { color: var(--text); }
+
+:where(a, button, input, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
 }
+
+.hidden { display: none !important; }
+.dim { color: var(--text-3); }
+
+/* Every number, code, timestamp and all-caps label. */
+.mono, .num, .tabular, code {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.label {
+  font: 400 11px/1.3 var(--mono);
+  letter-spacing: 0.06em;
+  color: var(--text-label);
+  text-transform: uppercase;
+}
+
+/* =========================================================================
+   Shell -- the register is the page. Above 1140px it caps and centres.
+   ========================================================================= */
 
 .page {
   max-width: 1140px;
   margin: 0 auto;
-  padding: clamp(20px, 4vw, 40px) clamp(16px, 3vw, 24px) 72px;
+  padding: 0;
 }
 
-/* ---- Header -------------------------------------------------------------- */
+/* Bands stack, separated by hairlines rather than boxed as cards. */
+.band { padding: 26px 34px 34px; border-top: 1px solid var(--hairline); }
+.band:first-child { border-top: none; }
+.band.raised { background: var(--bg-raised); }
 
-header.top {
+.band-head {
   display: flex;
-  align-items: flex-start;
+  align-items: baseline;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 28px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
+  margin-bottom: 16px;
 }
 
-header.top h1 {
-  font-size: 24px;
-  font-weight: 650;
-  letter-spacing: -0.021em;   /* large text needs negative tracking to look set */
-  line-height: 1.2;
+.band-head h2 {
+  font: 600 13px/1.3 var(--sans);
+  letter-spacing: 0.02em;
+  color: var(--text);
   margin: 0;
-  text-wrap: balance;
 }
 
-header.top .meta,
-header.top .subtitle {
-  color: var(--text-secondary);
-  font-size: 13px;
-  margin-top: 6px;
-  letter-spacing: -0.003em;
-}
+/* ---- Header bar ---------------------------------------------------------- */
 
-/* ---- Buttons ------------------------------------------------------------- */
-
-button {
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  border: 1px solid var(--border);
-  background: var(--surface-1);
-  color: var(--text-secondary);
-  border-radius: 8px;
-  padding: 7px 13px;
-  cursor: pointer;
-  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
-}
-
-button:hover {
-  background: var(--surface-2);
-  border-color: var(--baseline);
-  color: var(--text-primary);
-}
-
-button:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--series-1);
-  outline-offset: 2px;
-}
-
-header.top a,
-.card-actions a { text-decoration: none; }
-
-/* ---- Stat tiles ---------------------------------------------------------- */
-
-.kpi-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 12px;
-  margin-bottom: 28px;
-}
-
-.stat-tile {
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 18px;
-  box-shadow: var(--shadow);
-}
-
-.stat-tile .label {
+.topbar {
   display: flex;
   align-items: center;
-  min-width: 0;              /* flex children must allow their text to shrink */
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.35;
-  margin-bottom: 10px;
-  letter-spacing: 0.002em;
-  overflow-wrap: anywhere;   /* long train names shouldn't blow out the tile */
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 26px 34px;
+  border-bottom: 1px solid var(--hairline);
 }
 
-.stat-tile .value {
-  font-size: 32px;
-  font-weight: 600;
-  line-height: 1.05;
-  /* Proportional figures on display numbers -- tabular-nums makes a value like
-     121 read loose at this size (see dataviz anti-patterns). */
-  font-variant-numeric: proportional-nums;
-  letter-spacing: -0.028em;
-}
-
-/* Unit recedes so the figure carries the tile. */
-.stat-tile .value .unit {
-  font-size: 0.45em;
-  font-weight: 500;
-  color: var(--text-muted);
-  letter-spacing: 0;
-  margin-left: 3px;
-}
-
-.stat-tile .sub {
-  margin-top: 8px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-muted);
-}
-
-.stat-tile .swatch {
-  display: inline-block;
-  flex: none;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  margin-right: 7px;
-}
-
-/* Tiles that navigate to a per-train view. */
-.tile-link {
-  display: block;
+.topbar .brand {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
   text-decoration: none;
-  color: inherit;
-  transition: border-color 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+  min-width: 0;
 }
 
-.tile-link:hover {
-  border-color: var(--baseline);
-  transform: translateY(-2px);
-  box-shadow: 0 2px 4px rgba(11, 11, 11, 0.05), 0 8px 20px rgba(11, 11, 11, 0.05);
+.topbar .wordmark {
+  font: 700 16px/1.2 var(--sans);
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
 }
+
+.topbar .tagline {
+  font: 400 11px/1.2 var(--mono);
+  letter-spacing: 0.04em;
+  color: rgba(244, 242, 238, 0.38);
+  white-space: nowrap;
+}
+
+.nav { display: flex; gap: 18px; align-items: center; margin-left: auto; }
+
+.nav a {
+  font: 400 12.5px/1 var(--sans);
+  color: var(--text-2);
+  text-decoration: none;
+  padding-bottom: 3px;
+  border-bottom: 2px solid transparent;
+  transition: color 0.12s ease;
+}
+
+.nav a:hover { color: var(--text); }
+.nav a[aria-current="page"] { color: var(--text); border-bottom-color: var(--text); }
+
+/* Poll freshness. Mint while the pipeline is keeping up; the dot is the only
+   place on the page where a colour means "alive" rather than "late". */
+.polled { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+
+.polled i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ontime);
+  flex: none;
+}
+
+.polled.stale i { background: var(--minor); }
+.polled.dead i { background: var(--severe); }
+.polled.muted i { background: var(--bar-neutral-strong); }
+
+.polled span {
+  font: 400 11px/1 var(--mono);
+  color: rgba(244, 242, 238, 0.45);
+  letter-spacing: 0.02em;
+}
+
+/* =========================================================================
+   Hero -- one glance answers the question.
+   ========================================================================= */
+
+.hero-band {
+  padding: 40px 34px 34px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 48px;
+  align-items: end;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.hero-eyebrow {
+  font: 400 12px/1.2 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--text-label);
+  margin-bottom: 14px;
+}
+
+.hero-figure { display: flex; align-items: flex-end; gap: 14px; }
+
+.hero-figure .v {
+  font: 600 96px/0.85 var(--mono);
+  letter-spacing: -0.04em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-figure .u {
+  font: 400 22px/1 var(--sans);
+  color: var(--text-2);
+  padding-bottom: 8px;
+}
+
+.hero-note {
+  font: 400 14px/1.5 var(--sans);
+  color: var(--text-2);
+  margin-top: 18px;
+  max-width: 440px;
+  text-wrap: pretty;
+}
+
+.hero-rail { display: flex; flex-direction: column; gap: 14px; }
+
+.rail-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.rail-row .k { font: 400 11px/1.2 var(--mono); letter-spacing: 0.06em; color: var(--text-label); }
+.rail-row .v { font: 500 13px/1.2 var(--mono); color: var(--text); text-align: right; }
+.rail-row.lead .v { font-size: 15px; }
+.rail-row.spaced { margin-top: 8px; }
+
+/* One segment per tracked service; mint means that service ran on time. */
+.strip { display: flex; gap: 4px; height: 8px; }
+.strip i { flex: 1; background: var(--bar-neutral); }
+.strip i.on { background: var(--ontime); }
+
+/* =========================================================================
+   Tracked trains
+   ========================================================================= */
+
+.range { display: flex; gap: 6px; }
+
+/* Journey-state filter. Only meaningful for TODAY -- journeyState() is null
+   for anything not running today -- so index.html empties it in the wider
+   ranges rather than offering a control that filters on nothing. */
+.states { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+.states:empty { display: none; }
+
+.states button { display: inline-flex; align-items: center; gap: 7px; }
+
+.states button i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--bar-neutral-strong);
+}
+
+.states button.running i { background: var(--text); }
+.states button.before i { background: none; box-shadow: inset 0 0 0 1.5px var(--bar-neutral-strong); }
+.states button[aria-pressed="true"] i { background: var(--bg); }
+.states button.before[aria-pressed="true"] i { background: none; box-shadow: inset 0 0 0 1.5px var(--bg); }
+
+.range button,
+.states button {
+  font: 500 10.5px/1 var(--mono);
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+  background: none;
+  border: 1px solid var(--border-dashed);
+  border-radius: 3px;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.range button:hover,
+.states button:hover { color: var(--text); border-color: rgba(244, 242, 238, 0.3); }
+
+.range button[aria-pressed="true"],
+.states button[aria-pressed="true"] {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+
+/* Search is not in the mockups, but it is an existing feature -- restyled to
+   the register's language rather than dropped. */
+.search {
+  font: 400 11px/1 var(--mono);
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: none;
+  border: 1px solid var(--border-dashed);
+  border-radius: 3px;
+  padding: 6px 10px;
+  width: 200px;
+  max-width: 100%;
+}
+
+.search::placeholder { color: var(--text-3); }
+.search:focus-visible { outline-offset: 1px; }
+
+/* ---- Rows ---------------------------------------------------------------
+   Grid, not a table: the sparkbar and strip cells are graphics, and the
+   mobile treatment drops three of the six columns outright. */
+
+.reg { display: block; }
+
+.reg-head,
+.reg-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 150px 68px 92px 128px;
+  align-items: center;
+  gap: 18px;
+}
+
+.reg-head { padding: 0 34px 10px; margin: 0 -34px; }
+
+.reg-head span {
+  font: 400 10px/1.2 var(--mono);
+  letter-spacing: 0.1em;
+  color: rgba(244, 242, 238, 0.35);
+}
+
+.reg-row {
+  padding: 14px 34px;
+  margin: 0 -34px;
+  border-top: 1px solid var(--hairline);
+  color: inherit;
+  text-decoration: none;
+  transition: background-color 0.12s ease;
+}
+
+.reg-row:hover { background: rgba(244, 242, 238, 0.03); }
+.reg-row:last-of-type { border-bottom: 1px solid var(--hairline); }
+
+.r-no { font: 500 13px/1.2 var(--mono); color: rgba(244, 242, 238, 0.55); }
+.r-name { font: 600 15px/1.25 var(--sans); color: var(--text); display: block; }
+
+.r-meta {
+  font: 400 11.5px/1.3 var(--mono);
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  margin-top: 3px;
+  display: block;
+}
+
+/* Route over "dep → arr", with the journey track between the times. State
+   comes from the timetable, so it answers "should this be done by now?" --
+   which is what decides whether a delay figure is final. */
+.r-sched { min-width: 0; }
+/* Shorter than the table version -- the column is 150px and both times plus
+   the track have to sit on one line without wrapping. */
+.r-sched .jrny { width: 26px; margin: 0 5px; }
+.r-actual { font: 500 13px/1.2 var(--mono); color: var(--text); text-align: right; }
+
+.r-delay {
+  font: 600 15px/1.2 var(--mono);
+  color: var(--scale, var(--text));
+  text-align: right;
+}
+
+.r-delay.zero { font-size: 11px; font-weight: 500; letter-spacing: 0.04em; }
+.r-delay.none { color: var(--text-3); font-weight: 400; }
+
+/* ---- Sparkbars ----------------------------------------------------------
+   Seven fixed slots so the shape of the week reads down the column. A day
+   with no journey keeps its slot as a floor tick -- dropping it would shift
+   the other six and quietly invent a different week. */
+
+.spark {
+  display: flex;
+  gap: 3px;
+  justify-content: flex-end;
+  align-items: flex-end;
+  height: 26px;
+}
+
+.spark i { width: 14px; flex: none; background: var(--bar, var(--bar-neutral)); }
+.spark i.gap { height: 2px; background: rgba(244, 242, 238, 0.10); }
+
+/* ---- Awaiting first data ------------------------------------------------- */
+
+.awaiting {
+  margin-top: 22px;
+  padding: 20px 22px;
+  border: 1px dashed var(--border-dashed);
+  border-radius: 5px;
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 26px;
+  align-items: start;
+}
+
+.awaiting h3 {
+  font: 600 12px/1.3 var(--sans);
+  color: rgba(244, 242, 238, 0.75);
+  margin: 0 0 6px;
+}
+
+.awaiting .count { font: 400 11px/1.2 var(--mono); letter-spacing: 0.06em; color: rgba(244, 242, 238, 0.35); }
+
+.awaiting p {
+  font: 400 13px/1.55 var(--sans);
+  color: rgba(244, 242, 238, 0.45);
+  max-width: 520px;
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.chips { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+
+.chip {
+  font: 500 11.5px/1.2 var(--mono);
+  color: rgba(244, 242, 238, 0.6);
+  background: var(--chip);
+  padding: 6px 10px;
+  border-radius: 3px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.chip:hover { color: var(--text); background: rgba(244, 242, 238, 0.1); }
+
+/* =========================================================================
+   Weekly average delay
+   ========================================================================= */
+
+.week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
+
+.week.bars { align-items: end; height: 132px; }
+
+.week.bars > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  height: 100%;
+}
+
+.week.bars span {
+  font: 500 12px/1 var(--mono);
+  color: var(--text-2);
+  text-align: center;
+}
+
+.week.bars i { display: block; background: var(--bar-neutral); }
+.week.bars .today span { color: var(--text); }
+.week.bars .today i { background: var(--text); }
+.week.bars .worst span { color: var(--severe); }
+.week.bars .worst i { background: var(--severe); }
+
+.week.days {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.week.days span {
+  font: 400 10.5px/1 var(--mono);
+  letter-spacing: 0.06em;
+  color: rgba(244, 242, 238, 0.35);
+  text-align: center;
+}
+
+.week.days span.today { color: rgba(244, 242, 238, 0.6); }
+
+/* =========================================================================
+   States -- loading, unconfigured, error, empty
+   ========================================================================= */
+
+.notice {
+  margin: 22px 34px;
+  padding: 20px 22px;
+  border: 1px dashed var(--border-dashed);
+  border-radius: 5px;
+  font: 400 13px/1.6 var(--sans);
+  color: rgba(244, 242, 238, 0.55);
+  text-wrap: pretty;
+}
+
+.notice strong { color: var(--text); font-weight: 600; }
+.notice code { font-size: 12px; background: var(--chip); border-radius: 3px; padding: 1px 5px; }
+
+.notice.error { border-color: color-mix(in srgb, var(--severe) 45%, transparent); color: var(--severe); }
+.notice.error code { color: var(--severe); }
+
+.retry {
+  display: inline-block;
+  margin-top: 12px;
+  font: 500 10.5px/1 var(--mono);
+  letter-spacing: 0.06em;
+  color: var(--severe);
+  background: none;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.retry:hover { background: color-mix(in srgb, var(--severe) 12%, transparent); }
+
+.empty-state {
+  color: var(--text-3);
+  font: 400 13px/1.55 var(--sans);
+  padding: 32px 16px;
+  text-align: center;
+  text-wrap: pretty;
+}
+
+/* Skeleton preserves the layout so nothing jumps when the data lands. */
+.sk { background: rgba(244, 242, 238, 0.06); animation: sk 1.4s ease-in-out infinite; }
+.sk.fig { width: 160px; height: 96px; }
+.sk.line { height: 12px; border-radius: 2px; }
+.sk.row { height: 22px; margin: 14px 0; border-top: none; }
+
+@keyframes sk { 50% { background: rgba(244, 242, 238, 0.12); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .tile-link, button { transition: none; }
-  .tile-link:hover { transform: none; }
+  .sk { animation: none; }
+  *, *::before, *::after { transition-duration: 0.01ms !important; }
   .jrny.running i::after { animation: none; }
 }
+
+/* =========================================================================
+   Secondary pages -- train detail, health, raw data.
+   Same shell, same type roles; these keep their tables and charts.
+   ========================================================================= */
+
+.page-head { padding: 34px 34px 26px; border-bottom: 1px solid var(--hairline); }
+
+.eyebrow {
+  font: 400 11px/1.2 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(244, 242, 238, 0.38);
+  margin-bottom: 14px;
+}
+
+.eyebrow a { color: inherit; text-decoration: none; }
+.eyebrow a:hover { color: var(--text); }
+
+.page-head h1 {
+  font: 600 34px/1.15 var(--sans);
+  letter-spacing: -0.02em;
+  margin: 0;
+  text-wrap: pretty;
+  max-width: 760px;
+}
+
+.page-head .meta {
+  font: 400 12px/1.4 var(--mono);
+  color: var(--text-2);
+  margin-top: 10px;
+}
+
+/* ---- KPI strip (1b) -- 1px grid gaps read as dividers -------------------- */
+
+/* The 1px grid gaps show the background through as dividers, so the tiles need
+   no borders of their own. The next band's border-top closes the strip. */
+.hero, .kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1px;
+  background: var(--hairline);
+  margin: 0;
+}
+
+.hero .stat, .stat-tile {
+  background: var(--bg);
+  border: none;
+  border-radius: 0;
+  padding: 20px 22px;
+  box-shadow: none;
+}
+
+.hero .stat .k, .stat-tile .label {
+  font: 400 10.5px/1.3 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-label);
+  margin-bottom: 10px;
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.hero .stat .v, .stat-tile .value {
+  font: 600 38px/1 var(--mono);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.hero .stat .v .unit, .stat-tile .value .unit {
+  font: 400 13px/1 var(--sans);
+  color: var(--text-3);
+  letter-spacing: 0;
+  margin-left: 5px;
+}
+
+.hero .stat .d, .stat-tile .sub {
+  font: 400 11.5px/1.45 var(--mono);
+  color: var(--text-3);
+  margin-top: 8px;
+}
+
+.hero .stat .v.good, .stat-tile .value.good { color: var(--ontime); }
+.hero .stat .v.warn, .stat-tile .value.warn { color: var(--late); }
+.hero .stat .v.bad,  .stat-tile .value.bad  { color: var(--severe); }
 
 /* ---- Cards --------------------------------------------------------------- */
 
 .card {
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 24px;
-  margin-bottom: 20px;
-  box-shadow: var(--shadow);
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--hairline);
+  border-radius: 0;
+  padding: 26px 34px 34px;
+  margin: 0;
+  box-shadow: none;
 }
 
 .card .card-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   margin-bottom: 18px;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 12px;
 }
 
 .card h2 {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.009em;
+  font: 600 13px/1.3 var(--sans);
+  letter-spacing: 0.02em;
   margin: 0;
 }
 
@@ -331,606 +760,220 @@ header.top a,
 
 canvas { width: 100%; }
 
+/* ---- Buttons ------------------------------------------------------------- */
+
+button {
+  font: 500 10.5px/1 var(--mono);
+  letter-spacing: 0.06em;
+  border: 1px solid var(--border-dashed);
+  background: none;
+  color: var(--text-2);
+  border-radius: 3px;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+button:hover { color: var(--text); border-color: rgba(244, 242, 238, 0.3); }
+
 /* ---- Tables -------------------------------------------------------------- */
 
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-table.tabular {
-  /* Aligned digits are right here -- rows stack vertically. */
-  font-variant-numeric: tabular-nums;
-}
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.tabular { font-variant-numeric: tabular-nums; }
 
 thead th {
   text-align: left;
-  color: var(--text-muted);
-  font-weight: 600;
-  font-size: 11px;
-  line-height: 1.4;               /* uppercase caps need room or they look clipped */
-  letter-spacing: 0.045em;
+  font: 400 10px/1.4 var(--mono);
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  border-bottom: 1px solid var(--gridline);
+  color: rgba(244, 242, 238, 0.35);
+  border-bottom: 1px solid var(--hairline);
   padding: 4px 10px 10px;
   white-space: nowrap;
   vertical-align: bottom;
 }
 
 tbody td {
-  padding: 12px 10px;
-  border-bottom: 1px solid var(--gridline);
-  color: var(--text-primary);
+  padding: 14px 10px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
 }
 
-tbody tr { transition: background-color 0.1s ease; }
-tbody tr:hover { background: var(--hover-tint); }
+/* Names and prose stay in Archivo; only the numeric cells go mono. */
+tbody td.cell-train, tbody td.prose { font-family: var(--sans); }
+
+tbody tr { transition: background-color 0.12s ease; }
+tbody tr:hover { background: rgba(244, 242, 238, 0.03); }
 tbody tr:last-child td { border-bottom: none; }
 
-/* The raw-poll table can run to thousands of rows. Skips layout/paint for
-   off-screen rows without virtualisation; contain-intrinsic-size keeps the
-   scrollbar honest. */
-.db-long tbody tr {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 37px;
-}
+.db-long tbody tr { content-visibility: auto; contain-intrinsic-size: auto 41px; }
 
-/* ---- Status ink ---------------------------------------------------------- */
-
-.on-time { color: var(--status-good); font-weight: 500; }
-.late { color: var(--status-serious); font-weight: 500; }
-.very-late { color: var(--status-critical); font-weight: 500; }
-
-/* Same three bands, applied to table cells and stat-tile figures. */
-.d-good, .stat-tile .value.good { color: var(--status-good); }
-.d-warn, .stat-tile .value.warn { color: var(--status-serious); }
-.d-bad,  .stat-tile .value.bad  { color: var(--status-critical); }
-.d-good, .d-warn, .d-bad { font-weight: 600; }
-
-/* ---- Misc ---------------------------------------------------------------- */
-
-.empty-state {
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1.55;
-  padding: 32px 16px;
-  text-align: center;
-  text-wrap: pretty;
-}
-
-code {
-  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
-  font-size: 0.92em;
-  background: var(--surface-2);
-  border-radius: 4px;
-  padding: 1px 5px;
-}
-
-a { color: var(--series-1); }
-
-.hidden { display: none; }
-
-/* =========================================================================
-   App shell
-   ========================================================================= */
-
-.appbar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  background: color-mix(in srgb, var(--page-plane) 82%, transparent);
-  backdrop-filter: saturate(180%) blur(12px);
-  border-bottom: 1px solid var(--border);
-}
-
-.appbar-inner {
-  max-width: 1140px;
-  margin: 0 auto;
-  padding: 0 clamp(16px, 3vw, 24px);
-  height: 56px;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.017em;
-  color: var(--text-primary);
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.brand .mark {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: linear-gradient(145deg,
-    color-mix(in srgb, var(--series-1) 88%, white),
-    var(--series-1) 60%,
-    color-mix(in srgb, var(--series-7) 55%, var(--series-1)));
-  color: #fff;
-  font-size: 14px;
-  line-height: 1;
-  box-shadow: 0 1px 3px color-mix(in srgb, var(--series-1) 40%, transparent);
-}
-
-.nav { display: flex; gap: 2px; margin-left: auto; align-items: center; }
-
-.nav a {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  text-decoration: none;
-  padding: 6px 11px;
-  border-radius: 7px;
-  transition: background-color 0.14s ease, color 0.14s ease;
-}
-
-.nav a:hover { background: var(--surface-2); color: var(--text-primary); }
-.nav a[aria-current="page"] { color: var(--text-primary); background: var(--surface-2); }
-
-/* ---- Page title block ---------------------------------------------------- */
-
-.page-head { margin-bottom: 24px; }
-
-.eyebrow {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 7px;
-}
-
-.page-head h1 {
-  font-size: 34px;
-  font-weight: 700;
-  letter-spacing: -0.032em;
-  line-height: 1.15;
-  margin: 0;
-  text-wrap: balance;
-}
-
-.page-head .meta {
-  color: var(--text-secondary);
-  font-size: 13px;
-  margin-top: 8px;
-}
-
-/* ---- Hero stats ---------------------------------------------------------- */
-
-.hero {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 1px;                        /* hairline dividers, not boxes */
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  overflow: hidden;
-  margin-bottom: 24px;
-}
-
-.hero .stat { background: var(--surface-1); padding: 22px 22px 20px; }
-
-.hero .stat .k {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 8px;
-}
-
-.hero .stat .v {
-  font-size: 38px;
-  font-weight: 680;
-  line-height: 1;
-  letter-spacing: -0.038em;
-  font-variant-numeric: proportional-nums;
-}
-
-.hero .stat .v .unit {
-  font-size: 0.42em;
-  font-weight: 500;
-  color: var(--text-muted);
-  letter-spacing: 0;
-  margin-left: 3px;
-}
-
-.hero .stat .d { margin-top: 7px; font-size: 12px; color: var(--text-muted); }
-
-/* ---- Toolbar ------------------------------------------------------------- */
-
-.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-
-.toolbar input[type="search"] {
-  font: inherit;
-  font-size: 13px;
-  flex: 1 1 220px;
-  min-width: 0;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--page-plane);
-  color: var(--text-primary);
-}
-
-.toolbar .check {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  background: var(--surface-1);
-  border-radius: 9px;
-  padding: 7px 12px;
-  cursor: pointer;
-  white-space: nowrap;
-  user-select: none;
-}
-
-.toolbar .check:hover { border-color: var(--baseline); color: var(--text-primary); }
-.toolbar .check input { accent-color: var(--series-1); margin: 0; cursor: pointer; }
-.toolbar .check:has(input:checked) {
-  color: var(--series-1);
-  border-color: color-mix(in srgb, var(--series-1) 45%, transparent);
-  background: color-mix(in srgb, var(--series-1) 8%, var(--surface-1));
-}
-
-.toolbar input[type="search"]:focus-visible {
-  outline: 2px solid var(--series-1);
-  outline-offset: 1px;
-  border-color: transparent;
-}
-
-/* ---- Fleet list ---------------------------------------------------------- */
-
-.fleet { width: 100%; border-collapse: collapse; font-size: 13px; }
-
-/* Deliberately NOT sticky: the wrapper needs overflow-x for narrow screens,
-   which makes it a scroll container on both axes, so a sticky thead offsets
-   itself *inside* the box and clips the first rows. */
+.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .fleet tbody tr { cursor: pointer; }
-
 .fleet td { vertical-align: middle; }
+.fleet a { color: inherit; text-decoration: none; }
 
-.fleet .t-num {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
+.fleet .t-num { font: 500 13px/1.2 var(--mono); color: rgba(244, 242, 238, 0.55); }
 
 .fleet .t-name {
   display: block;
-  color: var(--text-muted);
-  font-size: 12px;
-  margin-top: 1px;
+  font: 600 14px/1.25 var(--sans);
+  color: var(--text);
+  margin-top: 2px;
   max-width: 34ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.fleet a { color: inherit; text-decoration: none; }
-.fleet tr:hover .t-num { color: var(--series-1); }
+.cell-sched { white-space: nowrap; font-family: var(--mono); }
+.cell-sched .stack { display: block; line-height: 1.4; }
+.cell-sched .r { font-size: 11.5px; color: var(--text-3); }
+.cell-sched .t { display: block; font-size: 12.5px; color: var(--text-2); }
 
-.num { text-align: right; font-variant-numeric: tabular-nums; }
+.arrow { color: var(--text-3); margin: 0 5px; }
 
-/* ---- Schedule column ------------------------------------------------------
-   Route over timing in one cell. Two columns for this is what made the table
-   overflow, and they're read together anyway. */
+/* ---- Status ink ---------------------------------------------------------- */
 
-.cell-sched { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.cell-sched .stack { display: block; line-height: 1.35; }
-.cell-sched .r { font-weight: 500; }
-.cell-sched .t { display: block; color: var(--text-secondary); font-size: 12px; }
+.on-time, .d-good { color: var(--ontime); }
+.late, .d-warn { color: var(--late); }
+.very-late, .d-bad { color: var(--severe); }
+.d-idle { color: var(--text-3); }
+.on-time, .late, .very-late, .d-good, .d-warn, .d-bad { font-weight: 600; }
 
-.arrow { color: var(--text-muted); margin: 0 5px; font-weight: 400; }
-
-/* ---- Journey progress ----------------------------------------------------
-   Replaces the arrow between the two times for a train running today: the
-   fill is where the timetable puts it right now, and the dot sits at its end
-   -- origin, somewhere along, or destination. Only "en route" pulses. */
+/* ---- Journey progress ---------------------------------------------------- */
 
 .jrny {
   position: relative;
   display: inline-block;
   width: 42px;
-  height: 4px;
+  height: 3px;
   margin: 0 7px;
   vertical-align: middle;
-  border-radius: 999px;
-  background: var(--surface-2);
-  box-shadow: inset 0 0 0 1px var(--border);
+  background: var(--track);
 }
 
-.jrny i { position: absolute; inset: 0 auto 0 0; border-radius: 999px; }
-.jrny.running i { background: var(--series-1); }
-.jrny.done    i { background: var(--baseline); }
+.jrny i { position: absolute; inset: 0 auto 0 0; }
+.jrny.running i { background: var(--text); }
+.jrny.done i { background: var(--bar-neutral-strong); }
 
-/* The dot rides the end of the fill, so it reads as one thing moving down the
-   line: at the origin before departure, along the track while running, at the
-   destination once it should have arrived. -3.5px (half its width) centres it
-   on the fill edge, so 0% and 100% land exactly on the track ends. */
 .jrny i::after {
   content: "";
   position: absolute;
-  right: -3.5px;
+  right: -3px;
   top: 50%;
-  width: 7px;
-  height: 7px;
-  margin-top: -3.5px;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
   border-radius: 50%;
-  background: var(--baseline);
-  box-shadow: 0 0 0 2px var(--surface-1);
+  background: var(--bar-neutral-strong);
 }
 
-/* Hollow at the origin, solid once it's actually moving. */
-.jrny.before i::after {
-  background: var(--surface-1);
-  box-shadow: 0 0 0 2px var(--surface-1), inset 0 0 0 1.5px var(--baseline);
-}
-
-.jrny.running i::after {
-  background: var(--series-1);
-  animation: jrny-pulse 2.4s ease-in-out infinite;
-}
+.jrny.before i::after { background: var(--track); box-shadow: inset 0 0 0 1.5px var(--bar-neutral-strong); }
+.jrny.running i::after { background: var(--text); animation: jrny-pulse 2.4s ease-in-out infinite; }
 
 @keyframes jrny-pulse {
-  50% {
-    box-shadow: 0 0 0 2px var(--surface-1),
-                0 0 0 5px color-mix(in srgb, var(--series-1) 24%, transparent);
-  }
+  50% { box-shadow: 0 0 0 4px rgba(244, 242, 238, 0.16); }
 }
 
-/* Running rows lift off the page; arrived rows are the neutral majority. */
-.fleet tr.j-running { background: color-mix(in srgb, var(--series-1) 5%, transparent); }
-.fleet tr.j-running td:first-child { box-shadow: inset 3px 0 0 var(--series-1); }
-.fleet tr.j-before .cell-sched .t { color: var(--text-muted); }
+.fleet tr.j-running td:first-child { box-shadow: inset 2px 0 0 var(--text); }
+.fleet tr.j-before .cell-sched .t { color: var(--text-3); }
 
-.jrny-legend {
-  display: flex;
-  gap: 8px;   /* the chips carry their own padding now */
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.jrny-legend:empty { display: none; }
+/* ---- Run days ------------------------------------------------------------ */
 
-/* Also the journey-state filter, so it has to be a real button -- keyboard
-   activation and the focus ring come from the global button rules. */
-.jl {
-  display: inline-flex; align-items: center; gap: 6px;
-  font: inherit; color: inherit; background: none;
-  border: 1px solid transparent; border-radius: 999px;
-  padding: 4px 10px; cursor: pointer;
-}
-.jl:hover { background: var(--surface-2); }
-.jl[aria-pressed="true"] {
-  background: var(--surface-2);
-  border-color: var(--border);
-  color: var(--text-primary);
-  font-weight: 600;
-}
-.jl i { width: 8px; height: 8px; border-radius: 999px; flex: none; }
-.jl.running i { background: var(--series-1); }
-.jl.done    i { background: var(--baseline); }
-.jl.before  i { background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--baseline); }
+.days-dots { display: inline-flex; gap: 2px; }
 
-/* "+1" = arrives the next day. */
-.plus {
-  color: var(--series-2);
-  font-size: 9px;
-  font-weight: 700;
-  margin-left: 2px;
-  top: -0.5em;
-}
-
-/* Seven fixed day slots -- the shape of the week is scannable down the column
-   without reading any of it. */
-.days { display: inline-flex; gap: 2px; }
-
-.days i {
+.days-dots i {
   display: grid;
   place-items: center;
   width: 15px;
   height: 15px;
-  border-radius: 4px;
+  border-radius: 2px;
+  font: 600 9px/1 var(--mono);
   font-style: normal;
-  font-size: 9px;
-  font-weight: 600;
-  background: var(--surface-2);
-  color: var(--text-muted);
-  opacity: 0.55;
+  background: var(--chip);
+  color: var(--text-3);
 }
 
-.days i.on {
-  background: color-mix(in srgb, var(--series-1) 16%, transparent);
-  color: var(--series-1);
-  opacity: 1;
-}
+.days-dots i.on { background: rgba(244, 242, 238, 0.16); color: var(--text); }
 
-/* Inline magnitude bar. Length carries the value; hue carries severity, which
-   is status (good/bad), not identity -- so status tokens are the correct
-   palette here rather than a categorical slot. */
-.bar-track {
-  position: relative;
-  height: 7px;
-  min-width: 64px;
-  border-radius: 4px;
-  background: var(--surface-2);
-  overflow: hidden;
-}
+/* ---- Magnitude bar ------------------------------------------------------- */
 
-.bar-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: 4px;
-  background: var(--status-good);
-  transition: width 0.3s ease;
-}
+.bar-track { position: relative; height: 7px; min-width: 64px; background: var(--track); overflow: hidden; }
+.bar-fill { position: absolute; inset: 0 auto 0 0; background: var(--ontime); transition: width 0.3s ease; }
+.bar-fill.warn { background: var(--late); }
+.bar-fill.bad { background: var(--severe); }
+.bar-fill.idle { background: var(--bar-neutral); }
 
-.bar-fill.warn { background: var(--status-serious); }
-.bar-fill.bad  { background: var(--status-critical); }
-.bar-fill.idle { background: var(--baseline); }
-
-/* ---- Sparklines ---------------------------------------------------------- */
+/* ---- Sparklines (train detail rows) -------------------------------------- */
 
 .spark-cell { line-height: 0; }
-.spark { display: block; overflow: visible; }
+.spark-line { fill: none; stroke: var(--spark, var(--text)); stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.spark-area { fill: color-mix(in srgb, var(--spark, var(--text)) 14%, transparent); stroke: none; }
+.spark-dot { fill: var(--spark, var(--text)); }
+.spark-flat { stroke: var(--hairline); stroke-width: 1.5; stroke-dasharray: 2 3; }
 
-.spark-line {
-  fill: none;
-  stroke: var(--spark, var(--series-1));
-  stroke-width: 1.75;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.spark-area { fill: color-mix(in srgb, var(--spark, var(--series-1)) 14%, transparent); stroke: none; }
-.spark-dot  { fill: var(--spark, var(--series-1)); }
-.spark-flat { stroke: var(--gridline); stroke-width: 1.5; stroke-dasharray: 2 3; }
-
-/* Trend takes the row's severity colour, so the table reads at a glance. */
-.spark-cell.good { --spark: var(--status-good); }
-.spark-cell.warn { --spark: var(--status-serious); }
-.spark-cell.bad  { --spark: var(--status-critical); }
-.spark-cell.idle { --spark: var(--baseline); }
+.spark-cell.good { --spark: var(--ontime); }
+.spark-cell.warn { --spark: var(--late); }
+.spark-cell.bad { --spark: var(--severe); }
+.spark-cell.idle { --spark: var(--bar-neutral-strong); }
 
 /* ---- Pills --------------------------------------------------------------- */
 
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 999px;
+  gap: 6px;
+  font: 500 10.5px/1 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: 3px;
   border: 1px solid currentColor;
-  background: color-mix(in srgb, currentColor 10%, transparent);
-  color: var(--text-secondary);
+  color: var(--text-2);
   white-space: nowrap;
 }
 
-.pill::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  flex: none;
-}
-
-.pill.good { color: var(--status-good); }
-.pill.warn { color: var(--status-serious); }
-.pill.bad  { color: var(--status-critical); }
-.pill.idle { color: var(--text-muted); background: transparent; border-color: var(--border); }
-
-/* ---- Accented hero figures ---------------------------------------------- */
-
-.hero .stat.accent { background: linear-gradient(var(--surface-1), var(--surface-1)) padding-box; }
-.hero .stat .v.good { color: var(--status-good); }
-.hero .stat .v.warn { color: var(--status-serious); }
-.hero .stat .v.bad  { color: var(--status-critical); }
-
-/* A hairline of colour at the top of each hero cell, in categorical order --
-   identity for the four measures, not magnitude. */
-.hero .stat { position: relative; }
-.hero .stat::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 3px;
-  background: var(--accent, var(--series-1));
-}
-
-.dim { color: var(--text-muted); }
+.pill::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; }
+.pill.good { color: var(--ontime); }
+.pill.warn { color: var(--late); }
+.pill.bad { color: var(--severe); }
+.pill.idle { color: var(--text-3); }
 
 /* ---- Comparison strip (train detail) ------------------------------------- */
 
 .context {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   flex-wrap: wrap;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 14px 18px;
-  margin-bottom: 20px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  box-shadow: var(--shadow);
+  border: 1px dashed var(--border-dashed);
+  border-radius: 5px;
+  padding: 16px 20px;
+  margin: 22px 34px 0;
+  font: 400 13px/1.55 var(--sans);
+  color: rgba(244, 242, 238, 0.55);
 }
 
-.context b { color: var(--text-primary); font-weight: 600; }
+.context b { color: var(--text); font-weight: 600; }
 
-/* ---- Sortable headers ---------------------------------------------------- */
+/* ---- Waiting disclosure -------------------------------------------------- */
 
-th.sortable { padding: 0; }
-
-.sort-btn {
-  /* Inherits the th's type styling; it is a control, not a chrome button. */
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.045em;
-  text-transform: uppercase;
-  color: inherit;
-  background: none;
-  border: none;
-  border-radius: 4px;
-  padding: 4px 10px 10px;
-  width: 100%;
-  text-align: inherit;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color 0.14s ease;
-}
-
-.sort-btn:hover { color: var(--text-primary); background: none; }
-th.sortable.active .sort-btn { color: var(--series-1); }
-.sort-btn:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
-th.num .sort-btn { text-align: right; }
-
-/* Reserve the arrow's width always, so sorting doesn't shift the columns. */
-.sort-arrow { display: inline-block; width: 10px; margin-left: 3px; font-size: 10px; }
-
-/* ---- Waiting list (native disclosure, no JS) ----------------------------- */
-
-.waiting {
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--surface-1);
-  margin-bottom: 20px;
-  box-shadow: var(--shadow);
-}
+.waiting { border-top: 1px solid var(--hairline); }
 
 .waiting > summary {
   cursor: pointer;
   list-style: none;
-  padding: 16px 22px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
+  padding: 20px 34px;
+  font: 600 12px/1.3 var(--sans);
+  color: rgba(244, 242, 238, 0.75);
   display: flex;
   align-items: center;
   gap: 9px;
-  border-radius: 14px;
 }
 
 .waiting > summary::-webkit-details-marker { display: none; }
@@ -947,47 +990,134 @@ th.num .sort-btn { text-align: right; }
 }
 
 .waiting[open] > summary::before { transform: rotate(90deg); }
-.waiting > summary:hover { color: var(--text-primary); }
-.waiting[open] > summary { border-bottom: 1px solid var(--border); border-radius: 14px 14px 0 0; }
-
-.waiting-body { padding: 4px 22px 20px; }
+.waiting-body { padding: 0 34px 26px; }
 
 .waiting-note {
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.55;
+  font: 400 13px/1.55 var(--sans);
+  color: rgba(244, 242, 238, 0.45);
   max-width: 68ch;
-  margin: 12px 0 14px;
+  margin: 0 0 16px;
   text-wrap: pretty;
 }
 
+/* ---- Toolbar / filters (health, raw data) -------------------------------- */
+
+.toolbar, .filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+.toolbar input[type="search"],
+.filters input, .filters select {
+  font: 400 11px/1 var(--mono);
+  color: var(--text);
+  background: none;
+  border: 1px solid var(--border-dashed);
+  border-radius: 3px;
+  padding: 7px 10px;
+}
+
+.toolbar input[type="search"] { flex: 1 1 220px; min-width: 0; }
+.filters input[type="search"] { flex: 1 1 260px; min-width: 200px; }
+.filters label { font: 400 10.5px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-label); }
+.filters select option { background: var(--surface); }
+
+/* ---- Misc ---------------------------------------------------------------- */
+
+code { font-size: 0.92em; background: var(--chip); border-radius: 3px; padding: 1px 5px; }
+.plus { color: var(--late); font: 600 9px var(--mono); margin-left: 2px; top: -0.5em; }
+sup.plus { position: relative; }
+
+/* Between the mobile breakpoint and full width there isn't room for six
+   columns. The sparkbars go first: they show shape, and the shape is on the
+   train's own page. */
+@media (max-width: 1000px) {
+  .reg-head, .reg-row { grid-template-columns: 88px minmax(0, 1fr) 144px 64px 84px; gap: 14px; }
+  .reg-head span:last-child, .spark { display: none; }
+}
+
 /* =========================================================================
-   Narrow screens: even at 7 columns, horizontal scrolling on
-   a phone is miserable for the one place people actually check train delays.
-   Below 900px each row becomes a card, with the header cell name shown as a
-   label via data-label.
+   Mobile -- option 1d. Single breakpoint; the register collapses to name +
+   delay over route + times, and the columns that need width are dropped
+   rather than squeezed.
    ========================================================================= */
 
+@media (max-width: 720px) {
+  /* Everything in the header bar is optional except the wordmark and the poll
+     clock, and nothing here may push the page wider than the viewport -- a
+     sideways scroll on the one screen people check on a platform is the whole
+     point of having a mobile treatment. */
+  .topbar { padding: 18px 20px; gap: 10px 16px; }
+  .topbar .wordmark { font-size: 14px; }
+  .topbar .tagline { display: none; }
+  .topbar .brand { flex: none; }
+  .polled span { font-size: 10px; }
+  .nav { gap: 14px; margin-left: auto; flex-wrap: wrap; }
+
+  .band, .card { padding: 22px 20px 26px; }
+
+  /* Title over controls, controls full width: the range pills and the filter
+     do not fit beside each other at 390px. */
+  .band-head { flex-direction: column; align-items: stretch; gap: 12px; }
+  .band-head .toolbar { width: 100%; }
+  .search { width: 100%; flex: 1 1 auto; min-width: 0; }
+  .range { flex: none; }
+  .page-head { padding: 26px 20px 22px; }
+  .page-head h1 { font-size: 26px; }
+  .notice, .context { margin-left: 20px; margin-right: 20px; }
+  .waiting > summary, .waiting-body { padding-left: 20px; padding-right: 20px; }
+
+  .hero-band { padding: 26px 20px; grid-template-columns: minmax(0, 1fr); gap: 26px; }
+  .hero-figure .v { font-size: 60px; letter-spacing: -0.03em; }
+  .hero-figure .u { font-size: 18px; padding-bottom: 5px; }
+  .hero-note { font: 400 11.5px/1.5 var(--mono); color: rgba(244, 242, 238, 0.42); max-width: none; }
+  .strip { height: 6px; gap: 3px; }
+
+  /* Name and delay on the first line, route and times on the second. The
+     state label is dropped rather than given a third line -- the journey
+     track already says where the train is. */
+  .reg-head { display: none; }
+
+  .reg-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 4px 14px;
+    padding: 14px 20px;
+    margin: 0 -20px;
+  }
+
+  .r-no, .r-actual, .r-meta, .spark { display: none; }
+  .r-name { font-size: 14px; }
+  .r-sched { grid-column: 1; grid-row: 2; }
+  .r-sched .stack { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .r-sched .t { display: inline; }
+  .r-delay { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 16px; }
+
+  .awaiting { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  /* "runs Mon, Wed, Thu, Fri, Sat, Sun" is wider than a small phone. */
+  .chip { white-space: normal; }
+  .week.bars { height: 100px; gap: 5px; }
+  .week.bars span { font-size: 10px; }
+  .week.days { gap: 5px; }
+  .week.days span { font-size: 9px; letter-spacing: 0.02em; }
+
+  .hero, .kpi-row { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  .hero .stat .v, .stat-tile .value { font-size: 28px; }
+}
+
+/* Tables on the secondary pages become cards rather than scrolling sideways;
+   the fleet page no longer has a table, but health and raw data still do. */
 @media (max-width: 900px) {
   .fleet thead { display: none; }
-
   .fleet, .fleet tbody, .fleet tr, .fleet td { display: block; width: 100%; }
 
   .fleet tbody tr {
-    border: 1px solid var(--border);
-    border-radius: 12px;
+    border: 1px solid var(--border-card);
+    border-radius: 4px;
     padding: 14px;
     margin-bottom: 10px;
-    background: var(--surface-1);
+    background: var(--surface);
   }
 
-  .fleet tbody tr:hover { background: var(--surface-1); }
-
-  /* As a card, the running state reads better on the border than as a bar. */
-  .fleet tbody tr.j-running {
-    border-color: color-mix(in srgb, var(--series-1) 45%, var(--border));
-    background: color-mix(in srgb, var(--series-1) 5%, var(--surface-1));
-  }
+  .fleet tbody tr:hover { background: var(--surface); }
+  .fleet tr.j-running { border-left: 3px solid var(--text); }
   .fleet tr.j-running td:first-child { box-shadow: none; }
 
   .fleet td {
@@ -1002,36 +1132,27 @@ th.num .sort-btn { text-align: right; }
 
   .fleet td::before {
     content: attr(data-label);
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
+    font: 400 10px/1.4 var(--mono);
+    letter-spacing: 0.1em;
     text-transform: uppercase;
+    color: rgba(244, 242, 238, 0.35);
     text-align: left;
     flex: none;
   }
 
-  /* The train cell is the card's title -- no label, full width. */
   .fleet td.cell-train {
     display: block;
     text-align: left;
     padding-bottom: 10px;
     margin-bottom: 8px;
-    border-bottom: 1px solid var(--gridline);
+    border-bottom: 1px solid var(--hairline);
   }
-  .fleet td.cell-train::before { content: none; }
-  .fleet td.cell-train .t-num { font-size: 15px; }
-  .fleet .t-name { max-width: none; white-space: normal; }
 
-  .fleet td.num { text-align: right; }
+  .fleet td.cell-train::before { content: none; }
+  .fleet .t-name { max-width: none; white-space: normal; }
   .fleet td.cell-sched .stack { text-align: right; }
   .bar-track { max-width: 55%; }
 
-  /* Sits under a sticky 56px bar; keep the toolbar usable one-per-row. */
   .card .card-head { flex-direction: column; align-items: stretch; }
   .toolbar { width: 100%; }
-  .toolbar input[type="search"] { flex: 1 1 auto; }
-
-  .page-head h1 { font-size: 24px; }
-  .hero .stat .v { font-size: 26px; }
 }

@@ -4,28 +4,22 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DB view · HowsMyTrain</title>
-<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#0c0c0d">
 <link rel="stylesheet" href="./styles.css">
 <script src="./common.js"></script>
 <style>
   /* Raw table can be wide/long -- let it scroll inside the card. */
   .db-scroll { overflow-x: auto; max-height: 70vh; overflow-y: auto; }
-  .db-scroll thead th { position: sticky; top: 0; background: var(--surface-1); }
-  .filters { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
-  .filters select, .filters input {
-    border: 1px solid var(--border); background: var(--surface-1);
-    color: var(--text-primary); border-radius: 8px; padding: 6px 10px; font-size: 13px;
-  }
-  .filters label { color: var(--text-muted); font-size: 12px; }
-  .filters input[type="search"] { flex: 1 1 260px; min-width: 200px; }
-  td.mono { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+  .db-scroll thead th { position: sticky; top: 0; background: var(--bg); }
+  .filters { margin-bottom: 18px; }
+  td.mono { color: var(--text-2); }
 </style>
 </head>
 <body>
+<div class="page">
   <div id="nav-slot"></div>
 
-  <main class="page" id="main" tabindex="-1">
+  <main id="main" tabindex="-1">
     <div class="page-head">
       <div class="eyebrow">Every stored poll</div>
       <h1>Raw data</h1>
@@ -48,6 +42,7 @@
       <div class="db-scroll" id="table-container"></div>
     </div>
   </main>
+</div>
 
 <script>
 // Supabase access and formatting helpers live in common.js. This page used to
@@ -116,6 +111,11 @@ async function load() {
   try {
     allPolls = await sb("polls", `select=*&order=polled_at.desc&limit=${encodeURIComponent(limit)}`);
     applyFilter();
+    // Neutral: polls only land when a train is due, so a gap here is the
+    // timetable, not a fault. The heartbeat lives on the health page.
+    setPolled(allPolls.length ? new Date(allPolls[0].polled_at) : null,
+              allPolls.length ? `LAST ROW ${istTime(new Date(allPolls[0].polled_at))} IST` : "NO ROWS",
+              true);
   } catch (err) {
     console.error(err);
     document.getElementById("summary").textContent = "Failed to load: " + err.message;
@@ -136,8 +136,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   box.addEventListener("input", applyFilter);
   document.getElementById("limit").addEventListener("change", load);
   document.getElementById("refresh").addEventListener("click", load);
-
-  setupTheme();
 
   load();
 });

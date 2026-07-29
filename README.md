@@ -158,34 +158,56 @@ GitHub only reads `.github/workflows/` at the repo root.
    API calls.
 
 4. **Pages** — Settings → Pages → deploy from branch, folder `/docs`. Then
-   fill in `SUPABASE_URL` and `SUPABASE_ANON_KEY` at the top of the script in
-   `docs/index.html` and commit. The anon key is public by design; RLS keeps
+   fill in `SUPABASE_URL` and `SUPABASE_ANON_KEY` at the top of
+   `docs/common.js` and commit. The anon key is public by design; RLS keeps
    it read-only.
 
 ### Dashboards
 
-- `docs/index.html` — reads Supabase directly. Served by GitHub Pages, works
-  as a plain file too. No backend needed.
+- `docs/index.html` — the punctuality register. Reads Supabase directly,
+  served by GitHub Pages, works as a plain file too. No backend needed.
+- `docs/train.html` — one train: per-day history, distribution, every poll.
+- `docs/health.html` — pipeline coverage and the poller heartbeat.
+- `docs/db.html` — raw `polls` table view, also straight from Supabase.
 - `docs/local.html` — the original dashboard, reads the `/api/*` routes off
   local SQLite. Needs `run_server.py`.
-- `docs/db.html` — raw `polls` table view, also via `/api/*`.
 
 `app/main.py` serves the same `docs/` directory, so local and hosted never
 drift apart.
 
 ## Extending the dashboard
 
-`static/index.html` / `app.js` / `styles.css` are a deliberately minimal
-starting point: a KPI row, one weekly trend chart, and a recent-polls table.
-Everything reads from the JSON API in `app/main.py`, so you can add new
-views without touching the backend, or add new `/api/...` endpoints backed
-by `app/aggregate.py` as you need new aggregations (e.g. per-station
-punctuality, day-of-week patterns, etc.).
+The hosted pages share `docs/common.js` (Supabase access, the delay scale,
+formatting, run-day logic) and `docs/styles.css`. `docs/local.html` +
+`app.js` are the older FastAPI-backed view, kept for offline work against
+local SQLite; add `/api/...` endpoints backed by `app/aggregate.py` if you
+need aggregations the Postgres views don't cover.
 
-Color roles are defined as CSS custom properties at the top of
-`static/styles.css` (categorical series slots, status colors, ink/gridline
-tokens) — reuse those roles rather than introducing new hex values, so new
-charts stay visually consistent.
+### Design
+
+The UI follows `design_handoff_punctuality_dashboard/` — option **1a
+("Ledger")**, dark only. Two rules carry most of it:
+
+- **Type has fixed jobs.** Archivo for names and prose, IBM Plex Mono for
+  every number, code, timestamp and all-caps label, so minutes align down a
+  column. Both are self-hosted in `docs/vendor/`.
+- **The delay scale is the only chromatic element.** Its four steps share
+  lightness and chroma and differ only in hue, so no step shouts louder than
+  the others. Everything else is ink on `#0c0c0d`, separated by hairlines and
+  surface steps rather than borders or shadows.
+
+Tokens live at the top of `docs/styles.css`, with `oklch` as the source of
+truth and a converted hex fallback. Reuse those roles rather than introducing
+new hex values. Two things there are load-bearing:
+
+- The **legacy aliases** (`--surface-1`, `--series-*`, `--gridline`, …) must
+  hold literal colours, never `var()` references: `train.html` reads them at
+  runtime via `getComputedStyle`, which returns the *specified* value for an
+  unregistered custom property.
+- The **colour scale and the on-time verdict are deliberately different.**
+  Hue steps at 5/20/60 min; "on time" is the DB's `<= 10` rule from
+  `app/aggregate.py` and `supabase/schema.sql`. `docs/common.test.js` pins
+  both so they don't drift into each other.
 
 ## Tests
 
