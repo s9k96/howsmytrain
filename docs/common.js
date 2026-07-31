@@ -232,6 +232,27 @@ function runDaysText(days) {
  * Returns the inner markup, so the register's grid rows and the tables on the
  * other pages can share it; scheduleCell() below wraps it in a <td>.
  */
+/**
+ * The day offset, marked on the DEPARTURE as a negative.
+ *
+ * Timetables write "06:30 +1" because they're read from the departure: you
+ * board tonight and arrive tomorrow. Every row here is anchored the other way
+ * round -- on the day the train *arrives*, since that's when we poll it and
+ * what "today" means on the register. Under that anchoring "+1" is not just
+ * unhelpful, it's backwards: it reads "arrives tomorrow" for a train that
+ * arrived this morning, which is why 12417 could show `07:00 +1` sitting in
+ * Completed. The same fact stated from the arrival end is `22:10⁻¹ → 07:00`.
+ *
+ * Nothing renders without a departure time to hang it on; a lone arrival is
+ * already ambiguous and a bare marker would not fix it.
+ */
+function dayOffset(t) {
+  const d = t.arrival_day_offset;
+  if (!d || !t.scheduled_departure) return "";
+  return `<sup class="dayoff" title="Departed ${d} day${d > 1 ? "s" : ""} before it arrives"
+    >&minus;${d}</sup>`;
+}
+
 function scheduleStack(t, j = journeyState(t)) {
   const route = (t.source_code || t.destination_code)
     ? `${esc(t.source_code || "?")}<span class="arrow">→</span>${esc(t.destination_code || "?")}`
@@ -243,8 +264,7 @@ function scheduleStack(t, j = journeyState(t)) {
         ><i style="width:${j.pct.toFixed(1)}%"></i></span>`
     : '<span class="arrow">→</span>';
   const timing = (t.scheduled_departure || t.scheduled_arrival)
-    ? `${hhmm(t.scheduled_departure)}${link}${hhmm(t.scheduled_arrival)}`
-      + (t.arrival_day_offset ? `<sup class="plus">+${t.arrival_day_offset}</sup>` : "")
+    ? `${hhmm(t.scheduled_departure)}${dayOffset(t)}${link}${hhmm(t.scheduled_arrival)}`
     : "";
   // One wrapper span so the mobile card layout sees a single flex item.
   return `<span class="stack"><span class="r">${route}</span><span class="t">${timing}</span></span>`;
@@ -284,6 +304,7 @@ function appbar(current) {
     </a>
     <nav class="nav" aria-label="Main">
       <a href="./index.html"${current === "fleet" ? ' aria-current="page"' : ""}>Fleet</a>
+      <a href="./stats.html"${current === "stats" ? ' aria-current="page"' : ""}>Stats</a>
       <a href="./health.html"${current === "health" ? ' aria-current="page"' : ""}>Health</a>
       <a href="./db.html"${current === "db" ? ' aria-current="page"' : ""}>Raw data</a>
     </nav>

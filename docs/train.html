@@ -307,8 +307,7 @@ function renderDetails(t) {
     ? `${esc(t.source_code || "?")} → ${esc(t.destination_code || "?")}`
     : "unknown";
   const timing = (t.scheduled_departure || t.scheduled_arrival)
-    ? `${hhmm(t.scheduled_departure)} → ${hhmm(t.scheduled_arrival)}`
-      + (t.arrival_day_offset ? ` <sup class="plus">+${t.arrival_day_offset}</sup>` : "")
+    ? `${hhmm(t.scheduled_departure)}${dayOffset(t)} → ${hhmm(t.scheduled_arrival)}`
     : "unknown";
 
   const facts = [

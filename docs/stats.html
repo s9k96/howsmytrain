@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fleet statistics · HowsMyTrain</title>
+<meta name="theme-color" content="#0c0c0d">
+<link rel="stylesheet" href="./styles.css">
+<script src="./common.js"></script>
+<style>
+  .table-scroll { overflow-x: auto; }
+
+  /* Sortable headers. The button carries the click so the header stays a real
+     control for keyboard and screen readers; aria-sort on the th is what
+     announces the current order, and the arrow is drawn from it so the two
+     can never disagree. */
+  th.sortable { padding: 0; }
+  th.sortable button {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    width: 100%;
+    padding: 0 0 9px;
+    font: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+  }
+  th.sortable.num button { justify-content: flex-end; }
+  th.sortable button:hover { color: var(--text); }
+  th.sortable button:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+  th[aria-sort] button { color: var(--text); }
+
+  /* U+2191/U+2193 rather than the triangles: both are in the subsetted mono
+     face, so they render in the header's own font instead of falling back. */
+  th.sortable button::after { content: ""; font-size: 9px; opacity: 0.5; }
+  th[aria-sort="ascending"] button::after { content: "\2191"; opacity: 1; }
+  th[aria-sort="descending"] button::after { content: "\2193"; opacity: 1; }
+
+  /* The journey length is a schedule fact, not a measurement -- it should not
+     read as loudly as the delay columns beside it.
+     Not `.jrny`: that name is taken by the progress track in styles.css, and
+     borrowing it renders every cell in this column as a 42x3px grey bar. */
+  td.cell-dur { color: var(--text-2); }
+
+  .stats-note { margin-top: 18px; }
+
+  /* An inline "undo" for the threshold, in the sentence that reports it. */
+  .linky {
+    all: unset;
+    cursor: pointer;
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .linky:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  /* ---- Distribution histogram ------------------------------------------- */
+  .stats-head { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 40px; align-items: end; }
+
+  .dist { display: flex; flex-direction: column; gap: 9px; }
+  .dist:empty { display: none; }
+  .dist-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .dist-title { font: 400 10px/1.2 var(--mono); letter-spacing: 0.1em; color: var(--text-3); }
+  .dist-read { font: 400 11px/1.2 var(--mono); color: var(--text-2); text-align: right; }
+
+  .dist-bars { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; }
+
+  .dist-bar {
+    all: unset;
+    cursor: pointer;
+    display: grid;
+    grid-template-rows: auto 58px auto;
+    gap: 5px;
+    align-items: end;
+  }
+  .dist-bar:disabled { cursor: default; }
+  .dist-bar:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  .dist-bar .n { font: 500 10px/1 var(--mono); color: var(--text-3); text-align: center; }
+  .dist-bar .x { font: 400 9.5px/1 var(--mono); color: var(--text-3); text-align: center; }
+  .dist-bar i { display: block; background: var(--c); min-height: 2px; }
+
+  .dist-bar:hover:not(:disabled) .n,
+  .dist-bar:hover:not(:disabled) .x { color: var(--text); }
+
+  /* Selecting a band dims the rest rather than hiding them: the shape of the
+     distribution is the context that makes the selection mean anything. */
+  .dist.has-sel .dist-bar:not([aria-pressed="true"]) { opacity: 0.3; }
+  .dist-bar[aria-pressed="true"] .n,
+  .dist-bar[aria-pressed="true"] .x { color: var(--text); }
+
+  @media (max-width: 900px) {
+    .stats-head { grid-template-columns: minmax(0, 1fr); gap: 26px; align-items: stretch; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div id="nav-slot"></div>
+
+  <main id="main" tabindex="-1">
+    <div class="page-head stats-head">
+      <div>
+        <div class="eyebrow">Every tracked service</div>
+        <h1>Fleet statistics</h1>
+        <div class="meta" id="subtitle" role="status" aria-live="polite">Loading…</div>
+      </div>
+      <div class="dist" id="dist"></div>
+    </div>
+
+    <section class="band">
+      <div class="band-head">
+        <h2>All trains</h2>
+        <div class="toolbar">
+          <input class="search" id="filter" type="search"
+                 placeholder="FILTER BY NUMBER, NAME OR CODE" aria-label="Filter trains">
+          <div class="range" id="minruns" role="group" aria-label="Minimum journeys observed">
+            <button type="button" data-min="0" aria-pressed="true">ALL</button>
+            <button type="button" data-min="1" aria-pressed="false">≥&nbsp;1</button>
+            <button type="button" data-min="3" aria-pressed="false">≥&nbsp;3</button>
+            <button type="button" data-min="5" aria-pressed="false">≥&nbsp;5</button>
+            <button type="button" data-min="10" aria-pressed="false">≥&nbsp;10</button>
+          </div>
+        </div>
+      </div>
+      <div class="table-scroll" id="table"></div>
+      <div id="hidden" role="status" aria-live="polite"></div>
+      <p class="waiting-note stats-note">
+        Every figure covers all journeys on record, not a fixed window, so a
+        service tracked for three days and one tracked for three weeks sit in
+        the same table — read <b>RUNS</b> before comparing them. A journey
+        counts only once a poll caught it actually running and returned a
+        delay; an asterisk means further journeys were seen but carried no
+        usable reading. <b>DELAY %</b> is the average delay as a share of the
+        scheduled journey time; it is the only column that compares a Shatabdi
+        to a thirty-hour long-haul fairly.
+      </p>
+    </section>
+  </main>
+</div>
+
+<script>
+// Supabase access, the delay scale, formatting and schedule helpers are in
+// common.js.
+
+let rows = [];
+let sortKey = "share";      // worst punctuality relative to run length first
+let sortDir = "desc";
+let minRuns = 0;            // hide services with fewer observed journeys than this
+let shareBin = null;        // index into SHARE_BINS, or null for no band selected
+
+// ---------------------------------------------------------------------------
+// Distribution bands
+//
+// Deliberately uneven. The fleet's delay share is heavily skewed -- most
+// services sit under 5% and a couple sit above 20% -- so equal 5% bins would
+// draw one tall bar and five empty ones, which is a picture of the binning
+// rather than of the fleet. These widen as they climb, which is where the
+// interesting spread actually is.
+//
+// Colours follow the delay scale's logic (a small share is fine, a large one
+// is not) without reusing its thresholds: DELAY_SCALE is absolute minutes and
+// means nothing here.
+// ---------------------------------------------------------------------------
+const SHARE_BINS = [
+  { hi: 0.01,     label: "0–1",   full: "0–1%",         color: "var(--ontime)" },
+  { hi: 0.02,     label: "1–2",   full: "1–2%",         color: "var(--ontime)" },
+  { hi: 0.05,     label: "2–5",   full: "2–5%",         color: "var(--minor)" },
+  { hi: 0.10,     label: "5–10",  full: "5–10%",        color: "var(--late)" },
+  { hi: 0.20,     label: "10–20", full: "10–20%",       color: "var(--severe)" },
+  { hi: Infinity, label: "20+",   full: "20% or more",  color: "var(--severe)" },
+];
+
+/** Band index for a delay share, or -1 for a service with nothing observed. */
+function binOf(share) {
+  if (share === null || share === undefined) return -1;
+  return SHARE_BINS.findIndex(b => share < b.hi);
+}
+
+const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+
+function median(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+// ---------------------------------------------------------------------------
+// Columns
+//
+// `val` is both the sort key and the source of the rendered cell, so a column
+// can never sort on one number and display another. `sort: false` opts a
+// column out of ordering entirely (the route block is two facts stacked and
+// has no single sensible order).
+// ---------------------------------------------------------------------------
+const COLS = [
+  { key: "no",     label: "NO.",                val: r => r.t.train_number, text: true },
+  { key: "svc",    label: "SERVICE",            val: r => r.t.name || "",   text: true },
+  { key: "route",  label: "ROUTE &amp; TIMETABLE", sort: false },
+  { key: "jrny",   label: "JOURNEY", num: true, val: r => r.span,
+    title: "Scheduled length of the run, source to destination" },
+  { key: "runs",   label: "RUNS",    num: true, val: r => r.runs,
+    title: "Journeys with a usable delay reading" },
+  { key: "ontime", label: "ON TIME", num: true, val: r => r.onTime,
+    title: "Share of observed journeys arriving within 10 minutes" },
+  { key: "avg",    label: "AVG",     num: true, val: r => r.avg },
+  { key: "med",    label: "MEDIAN",  num: true, val: r => r.med,
+    title: "Half of this train's journeys were later than this, half earlier" },
+  { key: "worst",  label: "WORST",   num: true, val: r => r.worst },
+  // Not "OF RUN": RUNS two columns left means the number of journeys, so
+  // "run" is already spoken for and the two read as the same quantity.
+  { key: "share",  label: "DELAY %", num: true, val: r => r.share,
+    title: "Average delay as a share of the scheduled journey time" },
+];
+
+/**
+ * One row per train, every figure derived from the same array of journeys.
+ *
+ * train_summary already publishes avg and on-time %, but median and worst are
+ * not in any view -- and computing some columns server-side and the rest here
+ * is how a table ends up with an average that disagrees with its own median.
+ * So the view supplies identity and schedule; all the statistics come off
+ * `journeys` below.
+ */
+function build(trains, journeys) {
+  const byTrain = {};
+  for (const j of journeys) (byTrain[j.train_number] ||= []).push(j);
+
+  return trains.map(t => {
+    const seen = byTrain[t.train_number] || [];
+    // A journey we polled but couldn't read a delay from is not a run we can
+    // average. It is still worth counting, so the RUNS cell can say why a
+    // train that clearly ran shows fewer runs than days tracked.
+    const delays = seen.map(j => j.delay_minutes).filter(v => v !== null && v !== undefined);
+    const span = journeyMinutes(t);
+    const avg = delays.length ? mean(delays) : null;
+    return {
+      t, span,
+      runs: delays.length,
+      unusable: seen.length - delays.length,
+      avg,
+      med: median(delays),
+      worst: delays.length ? Math.max(...delays) : null,
+      onTime: delays.length
+        ? 100 * delays.filter(d => band(d).cls === "good").length / delays.length
+        : null,
+      share: avg !== null && span ? avg / span : null,
+    };
+  });
+}
+
+/** Pure: the order comes in as arguments, so it can be checked without a DOM. */
+function sortRows(list, key = sortKey, dir = sortDir) {
+  const col = COLS.find(c => c.key === key);
+  const sign = dir === "asc" ? 1 : -1;
+  return [...list].sort((a, b) => {
+    const x = col.val(a), y = col.val(b);
+    // Nulls sink in BOTH directions. A train with no data is not the most
+    // punctual in the fleet, and reversing the sort must not promote it to
+    // the top of a league table it has never appeared in.
+    const nx = x === null || x === undefined;
+    const ny = y === null || y === undefined;
+    if (nx || ny) return nx && ny ? 0 : nx ? 1 : -1;
+    return col.text ? sign * String(x).localeCompare(String(y)) : sign * (x - y);
+  });
+}
+
+const pct = (v, digits = 0) => (v === null ? "—" : `${v.toFixed(digits)}%`);
+
+/** Delay figures wear the scale; a null wears nothing rather than a colour. */
+function delayNum(v) {
+  if (v === null) return '<span class="dim">—</span>';
+  return `<span style="color:${scaleOf(v)};font-weight:600">${fmtDelay(Math.round(v))}</span>`;
+}
+
+function render(list) {
+  const el = document.getElementById("table");
+  if (!list.length) {
+    // Name the filter that actually emptied the table, innermost first --
+    // "nothing matches that filter" is useless when the filter is a histogram
+    // band the user clicked three controls ago.
+    el.innerHTML = `<div class="empty-state">${
+      shareBin !== null ? `No service in this scope is delayed by ${SHARE_BINS[shareBin].full} of its journey time.`
+      : minRuns ? `No tracked service has ${minRuns} or more observed journeys yet.`
+      : "No tracked service matches that filter."
+    }</div>`;
+    return;
+  }
+
+  const head = COLS.map(c => {
+    const cls = (c.num ? "num " : "") + (c.sort === false ? "" : "sortable");
+    const title = c.title ? ` title="${c.title}"` : "";
+    if (c.sort === false) return `<th class="${cls}"${title}>${c.label}</th>`;
+    const active = c.key === sortKey;
+    const aria = active ? ` aria-sort="${sortDir === "asc" ? "ascending" : "descending"}"` : "";
+    return `<th class="${cls}"${aria}${title}>
+      <button type="button" data-key="${c.key}">${c.label}</button></th>`;
+  }).join("");
+
+  el.innerHTML = `
+    <table class="fleet tabular">
+      <thead><tr>${head}</tr></thead>
+      <tbody>${sortRows(list).map(r => {
+        const { t, span, runs, unusable, avg, med, worst, onTime, share } = r;
+        const href = `./train.html?train=${encodeURIComponent(t.train_number)}`;
+        const otCls = onTime === null ? "dim"
+          : onTime >= 80 ? "d-good" : onTime >= 50 ? "d-warn" : "d-bad";
+        return `
+        <tr data-href="${href}">
+          <td class="cell-train" data-label="Train">
+            <a href="${href}" class="t-num">${esc(t.train_number)}</a></td>
+          <td class="cell-train" data-label="Service">
+            <a href="${href}" class="t-name">${esc(t.name || "—")}</a></td>
+          <td class="cell-sched" data-label="Route">${scheduleStack(t, null)}</td>
+          <td class="num cell-dur" data-label="Journey">${span ? fmtDuration(span) : "—"}</td>
+          <!-- Count and asterisk in one span: the mobile card turns each td
+               into a space-between flex row, which would otherwise throw the
+               marker to the far edge, away from the number it qualifies. -->
+          <td class="num" data-label="Runs"${unusable ? ` title="${unusable} further journey${unusable === 1 ? " was" : "s were"} polled without a usable delay"` : ""}
+            ><span class="${runs ? "" : "dim"}">${runs}${unusable ? "*" : ""}</span></td>
+          <td class="num ${otCls}" data-label="On time">${pct(onTime)}</td>
+          <td class="num" data-label="Avg delay">${delayNum(avg)}</td>
+          <td class="num" data-label="Median">${delayNum(med)}</td>
+          <td class="num" data-label="Worst">${delayNum(worst)}</td>
+          <td class="num" data-label="Delay %">${
+            share === null ? '<span class="dim">—</span>'
+              : `<span style="color:${scaleOf(avg)}">${pct(share * 100, share < 0.1 ? 1 : 0)}</span>`
+          }</td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>`;
+
+  el.querySelectorAll("th button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.key;
+      // Same column toggles direction; a new column starts descending, because
+      // every numeric column here is one where "most" is the interesting end.
+      if (key === sortKey) sortDir = sortDir === "asc" ? "desc" : "asc";
+      else { sortKey = key; sortDir = COLS.find(c => c.key === key).text ? "asc" : "desc"; }
+      applyFilter();
+    });
+  });
+  wireRows(el);
+}
+
+function applyFilter() {
+  const q = document.getElementById("filter").value.trim().toLowerCase();
+  const scoped = rows.filter(({ t }) =>
+    !q || [t.train_number, t.name, t.source_code, t.destination_code]
+      .some(v => String(v ?? "").toLowerCase().includes(q)));
+
+  const eligible = scoped.filter(r => r.runs >= minRuns);
+  // The histogram counts the scope BEFORE the band selection, so picking a
+  // band doesn't flatten the other five to zero and strand you there.
+  renderDist(eligible);
+
+  const shown = shareBin === null ? eligible
+    : eligible.filter(r => binOf(r.share) === shareBin);
+  render(shown);
+
+  // Say what the threshold removed. A table that quietly drops a third of the
+  // fleet is how "our worst service is 5 minutes late" gets believed -- the
+  // count is the difference between a filtered view and a misleading one.
+  const hidden = scoped.length - shown.length;
+  document.getElementById("hidden").innerHTML = hidden
+    ? `<p class="waiting-note">${hidden} service${hidden === 1 ? "" : "s"} hidden —
+       fewer than ${minRuns} journey${minRuns === 1 ? "" : "s"} observed.
+       <button type="button" class="linky" id="showall">Show all</button></p>`
+    : "";
+  const showAll = document.getElementById("showall");
+  if (showAll) showAll.addEventListener("click", () => setMinRuns(0));
+}
+
+/**
+ * Histogram of delay share, doubling as the band filter.
+ *
+ * Counts come in as `scope` -- everything the search and the journeys
+ * threshold left -- so the bars describe the table you are looking at.
+ */
+function renderDist(scope) {
+  const counts = SHARE_BINS.map(() => 0);
+  let noData = 0;
+  for (const r of scope) {
+    const i = binOf(r.share);
+    if (i < 0) noData++; else counts[i]++;
+  }
+
+  const max = Math.max(...counts, 1);
+  const svc = (n) => `${n} service${n === 1 ? "" : "s"}`;
+  // What the readout says when nothing is hovered. Services with no observed
+  // journey have no share and so appear in no band -- said out loud, because
+  // otherwise the bars silently fail to add up to the fleet.
+  const idle = svc(scope.length - noData)
+    + (noData ? ` · ${noData} without data` : "");
+
+  const el = document.getElementById("dist");
+  el.className = "dist" + (shareBin === null ? "" : " has-sel");
+  el.innerHTML = `
+    <div class="dist-head">
+      <span class="dist-title">DELAY %</span>
+      <span class="dist-read" id="dist-read" role="status" aria-live="polite">${idle}</span>
+    </div>
+    <div class="dist-bars">${SHARE_BINS.map((b, i) => {
+      const n = counts[i];
+      const sel = shareBin === i;
+      return `
+      <button type="button" class="dist-bar" data-bin="${i}" aria-pressed="${sel}"
+              ${n === 0 && !sel ? "disabled" : ""}
+              title="${svc(n)} · ${b.full} of journey time"
+              aria-label="${svc(n)} delayed by ${b.full} of journey time${n === 0 && !sel ? "" : sel ? ". Selected — activate to clear" : ". Activate to filter"}">
+        <span class="n">${n || ""}</span>
+        <i style="height:${n ? Math.max(4, Math.round(100 * n / max)) : 0}%;--c:${b.color}"></i>
+        <span class="x">${b.label}</span>
+      </button>`;
+    }).join("")}</div>`;
+
+  const read = document.getElementById("dist-read");
+  el.querySelectorAll(".dist-bar").forEach(btn => {
+    const i = Number(btn.dataset.bin);
+    const show = () => { read.textContent = `${svc(counts[i])} · ${SHARE_BINS[i].full}`; };
+    btn.addEventListener("mouseenter", show);
+    btn.addEventListener("focus", show);
+    btn.addEventListener("mouseleave", () => { read.textContent = idle; });
+    btn.addEventListener("blur", () => { read.textContent = idle; });
+    btn.addEventListener("click", () => { shareBin = shareBin === i ? null : i; applyFilter(); });
+  });
+}
+
+function setMinRuns(n) {
+  minRuns = n;
+  document.querySelectorAll("#minruns button").forEach(b =>
+    b.setAttribute("aria-pressed", String(Number(b.dataset.min) === n)));
+  applyFilter();
+}
+
+async function main() {
+  document.getElementById("nav-slot").innerHTML = appbar("stats");
+  if (!configured()) {
+    document.getElementById("subtitle").textContent = "Awaiting Supabase config";
+    setPolled(null, "NOT CONFIGURED");
+    return;
+  }
+  try {
+    const [trains, journeys, runs] = await Promise.all([
+      sb("train_summary", "select=*&order=train_number"),
+      // All of history, deliberately: this page is the long view, and the
+      // whole fleet is a few hundred rows. Revisit the limit at ~15k, roughly
+      // a year of daily polling across 39 services.
+      sb("daily_delays", "select=train_number,journey_date,delay_minutes&limit=20000"),
+      sb("poller_runs", "select=ran_at&order=ran_at.desc&limit=1").catch(() => []),
+    ]);
+
+    rows = build(trains, journeys);
+    applyFilter();
+    setPolled(runs.length ? new Date(runs[0].ran_at) : null);
+
+    const observed = rows.reduce((a, r) => a + r.runs, 0);
+    const dates = journeys.map(j => j.journey_date).sort();
+    document.getElementById("subtitle").textContent =
+      `${trains.length} services · ${observed} journeys observed`
+      + (dates.length ? ` · since ${dates[0]}` : "");
+  } catch (err) {
+    console.error(err);
+    document.getElementById("subtitle").textContent = "Failed to load: " + err.message;
+    document.getElementById("table").innerHTML =
+      `<div class="empty-state">Couldn't reach the data. <code>${esc(err.message)}</code></div>`;
+    setPolled(null, "FETCH FAILED");
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("filter").addEventListener("input", applyFilter);
+  document.querySelectorAll("#minruns button").forEach(b =>
+    b.addEventListener("click", () => setMinRuns(Number(b.dataset.min))));
+  main();
+});
+</script>
+</body>
+</html>

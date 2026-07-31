@@ -18,7 +18,7 @@ vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, "common.js"), "utf8"), ctx);
 const { journeyState, fmtDelay, scaleOf, shiftTime, runDaysText, band,
         arrivalGap, arrivalMinutes, fmtDuration,
-        journeyMinutes, delayShare } = ctx;
+        journeyMinutes, delayShare, dayOffset, scheduleStack } = ctx;
 
 const DAILY = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const day   = { scheduled_departure: "06:00:00", scheduled_arrival: "12:00:00", arrival_day_offset: 0, run_days: DAILY };
@@ -126,4 +126,23 @@ assert.strictEqual(delayShare(0, day), 0);               // on time is a real 0%
 assert.strictEqual(delayShare(null, day), null);
 assert.strictEqual(delayShare(30, { scheduled_arrival: "12:00:00" }), null);
 
-console.log(`${cases.length} journeyState cases + 47 scale/format/timetable/share cases pass`);
+// ---- Day offset ------------------------------------------------------------
+// Rows are anchored on the ARRIVAL day, so the offset belongs on the departure
+// as a negative. Flipping it back to "+1" on the arrival is silent and reads
+// as "arrives tomorrow" on a train that finished this morning.
+assert.strictEqual(dayOffset(day), "");                          // same-day run
+assert.strictEqual(dayOffset({ scheduled_arrival: "06:00:00", arrival_day_offset: 1 }), "");
+assert.match(dayOffset(over), /&minus;1/);
+assert.match(dayOffset({ ...day, arrival_day_offset: 2 }), /&minus;2/);
+assert.match(dayOffset(over), /1 day before/);                   // singular
+assert.match(dayOffset({ ...day, arrival_day_offset: 2 }), /2 days before/);
+assert.ok(!/\+/.test(dayOffset(over)), "offset must not read as +1");
+
+// Placement is the whole point: the marker sits with 22:00, not with 06:00.
+const stack = scheduleStack(over, null);
+assert.ok(stack.indexOf("&minus;1") < stack.indexOf("06:00"),
+          "offset must precede the arrival time");
+assert.ok(stack.indexOf("22:00") < stack.indexOf("&minus;1"),
+          "offset must follow the departure time");
+
+console.log(`${cases.length} journeyState cases + 56 scale/format/timetable/share/offset cases pass`);
