@@ -85,32 +85,37 @@ def _window(arrival: str, now: datetime) -> tuple[datetime, datetime]:
     return min(target - BEFORE, end - MIN_WINDOW), end
 
 
-def _journey_date(train: dict, now: datetime) -> str:
+def _due_now(trains: list[dict], now: datetime, last_polled: dict[str, datetime]) -> list[str]:
     """
-    The date the run arriving now departed its source -- i.e. what RailRadar's
-    `startDate` will say, and therefore the journey_date the poll lands under.
+    Train numbers whose scheduled arrival falls in the window around now and
+    which we have not already read during that window.
 
-    Same mapping _runs_today uses to turn an arrival day into a departure day.
+    Dedup is by poll time, not by journey identity -- see store.last_polled for
+    why predicting the journey could not be made to work. One reading per
+    window is all the daily stat needs, and a failed poll writes no row, so it
+    is retried on the next tick.
     """
-    return (now - timedelta(days=train.get("arrival_day_offset") or 0)).strftime("%Y-%m-%d")
-
-
-def _due_now(trains: list[dict], now: datetime, already_polled: set[tuple[str, str]]) -> list[str]:
-    """Train numbers whose scheduled arrival falls in the window around now."""
     due = []
     for t in trains:
         number = t["train_number"]
-        if (number, _journey_date(t, now)) in already_polled:
-            continue  # one reading per journey is all the daily stat needs
         if not _runs_today(t, now):
             continue  # doesn't run today -- polling returns the next run, not this one
+        last = last_polled.get(number)
         arrival = t.get("scheduled_arrival")
         if not arrival:
-            due.append(number)  # unknown schedule -> poll once to learn it
+            # Unknown schedule -> one poll to learn it. Compared as an elapsed
+            # span rather than a calendar day because the stored timestamps are
+            # UTC while `now` is IST, and a train we know nothing about needs
+            # one reading a day, not one per tick.
+            if last is None or (now - last) > timedelta(hours=12):
+                due.append(number)
             continue
         start, end = _window(arrival, now)
-        if start <= now <= end:
-            due.append(number)
+        if not start <= now <= end:
+            continue
+        if last is not None and last >= start:
+            continue
+        due.append(number)
     return due
 
 
@@ -130,14 +135,15 @@ def main() -> int:
         due = configured
     else:
         known = {t["train_number"]: t for t in store.list_trains()}
-        # Wide enough to cover the largest arrival_day_offset in the fleet (2)
-        # with slack, so an overnight run's earlier poll is still visible.
-        already = store.polled_journeys((now - timedelta(days=3)).strftime("%Y-%m-%d"))
+        # A window is at most 100 min wide, so two days of poll history is
+        # ample -- it only has to cover the current window plus the 12 h guard
+        # on trains whose schedule we haven't learned yet.
+        last = store.last_polled((now - timedelta(days=2)).strftime("%Y-%m-%d"))
         # Order by configured list so behaviour is deterministic.
         due = _due_now(
             [known.get(n, {"train_number": n, "scheduled_arrival": None}) for n in configured],
             now,
-            already,
+            last,
         )
 
     if args.dry_run:

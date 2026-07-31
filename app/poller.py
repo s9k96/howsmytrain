@@ -175,9 +175,15 @@ def poll_train(client: RailRadarClient, train_number: str) -> bool:
         raw=data,
         journey_date=_extract_start_date(data),
     )
+    # journey is logged because it identifies *which run* RailRadar returned.
+    # For a service scheduled longer than 24 h two runs are live at once and the
+    # endpoint may hand back either, so a poll taken near today's arrival can
+    # legitimately carry a later run's departure date. Without this in the log
+    # that substitution is invisible.
     logger.info(
-        "Polled %s (%s): status=%s delay=%smin at %s",
-        train_number, name or "?", status, delay_minutes, station_code,
+        "Polled %s (%s): journey=%s status=%s delay=%smin at %s",
+        train_number, name or "?", _extract_start_date(data) or "?",
+        status, delay_minutes, station_code,
     )
     return True
 

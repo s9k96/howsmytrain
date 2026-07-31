@@ -10,6 +10,7 @@ PostgREST is used over plain httpx rather than psycopg/supabase-py so CI
 installs nothing beyond what requirements.txt already has.
 """
 import logging
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -166,22 +167,43 @@ def list_trains() -> list[dict]:
     return resp.json()
 
 
-def polled_journeys(since_date: str) -> set[tuple[str, str]]:
+def last_polled(since_date: str) -> dict[str, datetime]:
     """
-    (train_number, journey_date) for every poll filed on or after since_date.
+    train_number -> the most recent polled_at on or after since_date.
 
-    Keyed by journey rather than by poll date: journey_date is now the run's
-    departure date, so a train arriving this morning off an overnight run is
-    filed under yesterday. Checking "polled today" would miss it and re-poll
-    it on every remaining tick of its window.
+    Dedup is keyed on *when a train was last read*, never on which journey the
+    reading turned out to belong to.
+
+    Predicting the journey is what this replaces, and the prediction could not
+    be made correct. `poll_due` derived the expected journey_date as
+    `now - arrival_day_offset` -- i.e. "the run arriving now". But for a service
+    whose scheduled run exceeds 24 h, two runs are in the air simultaneously and
+    RailRadar's live endpoint returns whichever it considers active, which may
+    be the later one. Its `startDate` then files the poll under a date the
+    prediction never guessed, the key never matched, and the train was re-polled
+    on every remaining tick of its window: 12621 spent 7 requests on one journey
+    on 2026-07-30, and the last of them overwrote a usable delay with a null.
+
+    "Have we read this train since its window opened?" cannot drift, because
+    both sides of it are poll times we control. Twelve of the fleet's services
+    run longer than 24 h, so this is the common case, not an edge one.
     """
     if not enabled():
-        rows = db.list_polls(since_date=since_date, limit=2000)
-        return {(r["train_number"], r["journey_date"]) for r in rows}
+        rows = db.list_polls(since_date=since_date, limit=5000)
+        out: dict[str, datetime] = {}
+        for r in rows:
+            at = datetime.fromisoformat(r["polled_at"])
+            if at > out.get(r["train_number"], at.min.replace(tzinfo=at.tzinfo)):
+                out[r["train_number"]] = at
+        return out
     resp = httpx.get(
-        _url(f"polls?select=train_number,journey_date&journey_date=gte.{since_date}"),
+        _url(f"polls?select=train_number,polled_at&polled_at=gte.{since_date}"
+             "&order=polled_at.desc&limit=5000"),
         headers=_headers(),
         timeout=TIMEOUT,
     )
-    _check(resp, "polled_journeys")
-    return {(r["train_number"], r["journey_date"]) for r in resp.json()}
+    _check(resp, "last_polled")
+    out = {}
+    for r in resp.json():   # newest first, so the first hit per train wins
+        out.setdefault(r["train_number"], datetime.fromisoformat(r["polled_at"]))
+    return out

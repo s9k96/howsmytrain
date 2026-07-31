@@ -77,53 +77,76 @@ rather than `not-started` rows before adding more of that shape.
 
 ## Correctness, when accuracy starts mattering
 
-### `journey_date` — fix shipped, **not yet verified**. Watch this.
-`app/poller.py:_extract_start_date` files each poll under RailRadar's
-`startDate` (the run's departure date), and `poll_due.py` keys its dedup on
-`(train_number, journey_date)` to match. Shipped in `03af7ec`, 2026-07-29
-13:45 IST. Polls before that carry the arrival date and are not backfilled.
+### ~~`journey_date` uses poll time~~ — verified working 2026-07-30
+`_extract_start_date` does what it claims. First decisive evidence: 12621
+(`arrival_day_offset = 2`) polled 2026-07-30 06:30 IST filed under
+`journey_date = 2026-07-29`, the run's real departure date — corroborated by
+position (Warangal, ~9 h out of Chennai, consistent with a 22:00 departure the
+previous night). Polls before `03af7ec` still carry the arrival date and are
+not backfilled, so mixed conventions live in the table until they age out.
 
-**It has never actually been exercised.** As of 2026-07-29 21:00 IST, all 5
-polls since the fix are `arrival_day_offset = 0` trains, where the departure
-date and the poll date are the same day — so they cannot tell the two
-conventions apart. 68 of 68 stored polls still carry the poll date. The first
-real test is the next **overnight** train (21 of 39 have `offset > 0`; the
-early-morning cluster — 12425 arr 05:00 +1, 12565 arr 05:05 +1, 12615 arr
-05:10 +2 — gets there first).
+Verifying it exposed the re-poll bug below, now fixed.
 
-**What to check on the first offset>0 poll after the fix:**
+### ~~Dedup predicted the journey instead of observing it~~ — fixed
+`poll_due._due_now` used to skip a train when
+`(number, now - arrival_day_offset)` was already on file: a *prediction* of
+which journey the poll would land under. It could not be made correct.
 
-1. Its `journey_date` should be the **day before** the poll date. If it still
-   equals the poll date, `startDate` isn't landing where `_first(data,
-   "startDate")` looks and the fix is silently a no-op.
-2. No duplicate polls in that train's window. `poll_due._journey_date` derives
-   the dedup key as `now - offset`; if the stored value doesn't match, the
-   train is re-polled on every remaining tick of its 100-minute window —
-   roughly 6 wasted requests each, against a 50/day budget.
+**Why it broke.** Twelve of 39 services are scheduled longer than 24 h, so two
+of their runs are always in the air. RailRadar's live endpoint returns whichever
+it considers active, which may be the later one — whose `startDate` is a date
+the prediction never guessed. The key then never matched and the train was
+re-polled on *every* remaining tick of its window. On 2026-07-30, 12621 spent
+**7 requests on one journey** (14% of the daily budget), and the last of them
+overwrote a usable `delay=20` with `delay=None`, because `daily_delays` takes
+the latest poll per journey regardless of whether it carries a reading.
+
+**The fix** keys dedup on *when we last read the train* (`store.last_polled`)
+rather than on which journey the reading turned out to be: "have we read this
+train since its window opened?" — both sides of which are poll times we
+control. Replaying the seven real ticks against the new logic yields one call.
+A failed poll still writes no row, so the window keeps retrying it.
+
+### `daily_delays` prefers the latest poll over a usable one
+`select distinct on (train_number, journey_date) ... order by polled_at desc`
+takes the most recent poll even when its `delay_minutes` is null, so a later
+reading with no delay hides an earlier one that had it. This is how 12621's
+2026-07-29 journey ended up with no delay on 2026-07-30.
+
+Much less likely to bite now that a journey gets one poll rather than seven,
+but it is still the wrong preference. One-line change, needs running in the
+Supabase SQL editor:
 
 ```sql
--- both conventions, side by side
-select p.train_number, t.arrival_day_offset, p.journey_date,
-       (p.polled_at at time zone 'Asia/Kolkata')::date as polled_ist, count(*) over
-       (partition by p.train_number, p.journey_date) as polls_in_bucket
-from polls p join trains t using (train_number)
-where t.arrival_day_offset > 0 and p.polled_at > '2026-07-29 08:15Z'
-order by p.polled_at desc;
+-- prefer a poll that carries a delay; fall back to the latest
+order by p.train_number, p.journey_date, (p.delay_minutes is null), p.polled_at desc;
 ```
 
-**Coupled to the dashboard.** `docs/index.html` answers "did today's run
-report?" from `polled_at`, *not* `journey_date`, precisely because the latter
-is mid-migration — keying on `journey_date == today` would drop every
-overnight train from the TODAY view the moment the fix takes effect. Anything
-else that buckets by day (the row sparkbars, the weekly panel) still uses
-`journey_date` and will read a day early for overnight trains until the
-legacy rows age out of the 30-day window.
+### RailRadar returns the wrong run for services longer than 24 h
+Separate from the dedup, and not fixed. Polling near arrival is supposed to
+catch a near-final delay, but for the 12 long-haul services the endpoint may
+return the run that departed *later* and is still mid-journey — so we record a
+mid-run reading of a different journey and never see the one that just arrived.
+12621 on 2026-07-30 is the worked example: seven readings of the 29 Jul
+departure, nothing for the run that arrived that morning.
+
+`app/poller.py` now logs `journey=<startDate>` on every poll, so the
+substitution is visible in the Actions log instead of silent. A real fix needs
+the endpoint to accept a departure date (or picking the run out of a schedule
+listing), so it is worth doing only if long-haul accuracy starts mattering.
+
+### Dashboard is coupled to the `journey_date` migration
+`docs/index.html` answers "did today's run report?" from `polled_at`, not
+`journey_date`, because the table holds both conventions until the pre-`03af7ec`
+rows age out. Keying on `journey_date == today` would drop every long-haul train
+from the TODAY view. The row sparkbars and the weekly panel still bucket by
+`journey_date` and read a day early for those trains meanwhile.
 
 ### The due window still clips at midnight
 `_window` in `scripts/poll_due.py` ends a window at 23:59 rather than letting
-it wrap. With `journey_date` fixed, wrapping is now *safe* — but it needs
-`_window` to return which arrival date it matched, and `_journey_date` to use
-that instead of `now`, so the dedup stays aligned.
+it wrap. Wrapping is now *cheap* as well as safe: dedup keys on poll time, so
+it no longer has to agree with anything about which date a journey belongs to —
+`_window` just has to return a span that may cross midnight.
 
 Worth doing only if the accuracy matters: the clip costs one train (20978,
 arriving 23:58) a reading up to ~45 min early, and nothing else in the fleet.
