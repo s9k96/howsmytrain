@@ -107,20 +107,29 @@ train since its window opened?" — both sides of which are poll times we
 control. Replaying the seven real ticks against the new logic yields one call.
 A failed poll still writes no row, so the window keeps retrying it.
 
-### `daily_delays` prefers the latest poll over a usable one
-`select distinct on (train_number, journey_date) ... order by polled_at desc`
-takes the most recent poll even when its `delay_minutes` is null, so a later
-reading with no delay hides an earlier one that had it. This is how 12621's
-2026-07-29 journey ended up with no delay on 2026-07-30.
+### ~~`daily_delays` prefers the latest poll over a usable one~~ — code fixed, **SQL still to run**
+A later poll with a null `delay_minutes` used to hide an earlier one that had a
+number, so the whole journey reported no delay. Both twins now prefer the last
+poll that actually measured something and fall back to the plain latest only
+when every poll is null:
 
-Much less likely to bite now that a journey gets one poll rather than seven,
-but it is still the wrong preference. One-line change, needs running in the
-Supabase SQL editor:
+- `supabase/schema.sql` — `order by ..., (p.delay_minutes is null), p.polled_at desc`
+- `app/db.py:list_journey_final_delays` — the `COALESCE(MAX(CASE WHEN ...))` twin
+- covered by two cases in `tests/test_aggregate.py`
 
-```sql
--- prefer a poll that carries a delay; fall back to the latest
-order by p.train_number, p.journey_date, (p.delay_minutes is null), p.polled_at desc;
-```
+**The Postgres view is not live yet.** PostgREST cannot run DDL and there is no
+DB password in `.env`, so the `create or replace view daily_delays ...` block in
+`supabase/schema.sql` has to be pasted into the Supabase SQL editor by hand. It
+is safe to re-run: the column list is unchanged, so `train_summary` and
+`weekly_stats` keep working.
+
+Replayed against all 97 stored journeys, it changes exactly one: 12621's
+2026-07-29 run, `null -> 20 min`. The other 9 nulls are journeys where no poll
+ever carried a delay, which is the honest answer.
+
+Note it does **not** address a journey drifting across several non-null
+readings (12723 on 2026-07-31 was polled 6 times, 27→9, and the latest wins
+either way). That was the re-polling, fixed by the dedup change above.
 
 ### RailRadar returns the wrong run for services longer than 24 h
 Separate from the dedup, and not fixed. Polling near arrival is supposed to

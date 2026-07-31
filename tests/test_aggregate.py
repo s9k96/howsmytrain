@@ -34,6 +34,33 @@ def test_daily_stats_uses_last_poll_of_the_day(temp_db):
     assert rows[0]["on_time"] is False
 
 
+def test_daily_stats_prefers_a_poll_that_carries_a_delay(temp_db):
+    # A journey polled repeatedly can end on a reading with no delay. Taking
+    # the plain latest poll then reports the whole day as "no data" even though
+    # we measured it -- how 12621's 2026-07-30 journey lost a 20 min delay.
+    db.upsert_train("12621", "Tamil Nadu Express")
+    _insert("12621", "2026-07-29", delay_minutes=9)
+    _insert("12621", "2026-07-29", delay_minutes=20)
+    _insert("12621", "2026-07-29", delay_minutes=None)
+    _insert("12621", "2026-07-29", delay_minutes=None)
+
+    rows = aggregate.daily_stats(train_number="12621", days=30)
+    assert len(rows) == 1
+    assert rows[0]["delay_minutes"] == 20      # latest that measured anything
+
+
+def test_daily_stats_keeps_a_journey_whose_polls_all_lack_a_delay(temp_db):
+    # "We saw it and learned nothing" is a real outcome, not a row to drop.
+    db.upsert_train("12553", "Vaishali Express")
+    _insert("12553", "2026-07-29", delay_minutes=None)
+    _insert("12553", "2026-07-29", delay_minutes=None)
+
+    rows = aggregate.daily_stats(train_number="12553", days=30)
+    assert len(rows) == 1
+    assert rows[0]["delay_minutes"] is None
+    assert rows[0]["on_time"] is False
+
+
 def test_daily_stats_on_time_threshold(temp_db):
     db.upsert_train("12951", "Rajdhani")
     _insert("12951", "2026-07-20", delay_minutes=8)  # within 10 min threshold

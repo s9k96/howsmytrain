@@ -78,9 +78,18 @@ create table if not exists poller_runs (
 
 create index if not exists idx_poller_runs_ran_at on poller_runs (ran_at desc);
 
--- One row per (train, journey_date): the LAST poll of that journey, i.e. our
--- best estimate of how late the train ultimately was. Postgres DISTINCT ON
--- replaces the self-join the SQLite version needs.
+-- One row per (train, journey_date): the last poll of that journey that
+-- actually carried a delay -- our best estimate of how late the train
+-- ultimately was. Postgres DISTINCT ON replaces the self-join the SQLite
+-- version needs.
+--
+-- `(delay_minutes is null)` sorts first (false < true), so a reading always
+-- beats a non-reading and only then does the latest win. Plain `polled_at
+-- desc` let a later poll with no delay hide an earlier one that had it: on
+-- 2026-07-30, 12621 was read seven times as 0/0/9/20/null/null and the
+-- journey reported no delay at all. A journey where *every* poll is null
+-- still appears, with a null delay -- that is a real "we saw it and learned
+-- nothing", not something to hide.
 --
 -- 'not-started' rows are excluded on purpose. RailRadar's live endpoint
 -- returns the train's *currently active* run, so polling either too early or
@@ -101,7 +110,7 @@ select distinct on (p.train_number, p.journey_date)
 from polls p
 join trains t using (train_number)
 where p.status is distinct from 'not-started'
-order by p.train_number, p.journey_date, p.polled_at desc;
+order by p.train_number, p.journey_date, (p.delay_minutes is null), p.polled_at desc;
 
 -- Weekly rollup. Mirrors app/aggregate.py:weekly_stats.
 create or replace view weekly_stats

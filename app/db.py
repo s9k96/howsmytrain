@@ -152,15 +152,27 @@ def list_journey_final_delays(
     since_date: Optional[str] = None,
 ) -> list[sqlite3.Row]:
     """
-    For each (train_number, journey_date), return the LAST poll of that
-    journey -- i.e. our best estimate of how late the train ultimately was
-    that day. This is the row used for day/week efficiency aggregation.
+    For each (train_number, journey_date), return the last poll of that journey
+    that actually carried a delay -- our best estimate of how late the train
+    ultimately was that day. This is the row used for day/week aggregation.
+
+    Preferring a reading over a non-reading matters because a journey can be
+    polled several times: a later poll with a null delay would otherwise hide
+    an earlier one that had a number, and the day would report nothing. Falls
+    back to the plain latest when every poll is null, so the journey still
+    appears -- "we saw it and learned nothing" is a real outcome.
+
+    Mirrors the `daily_delays` view in supabase/schema.sql; keep the two in step.
     """
     query = """
         SELECT p.*
         FROM polls p
         INNER JOIN (
-            SELECT train_number, journey_date, MAX(polled_at) AS max_polled_at
+            SELECT train_number, journey_date,
+                   COALESCE(
+                       MAX(CASE WHEN delay_minutes IS NOT NULL THEN polled_at END),
+                       MAX(polled_at)
+                   ) AS max_polled_at
             FROM polls
             WHERE 1=1
             {train_filter}
