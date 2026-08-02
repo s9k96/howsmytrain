@@ -72,6 +72,8 @@
       <div class="table-scroll" id="polls-table"></div>
     </div>
   </main>
+
+  <div id="foot-slot"></div>
 </div>
 
 <script>
@@ -417,6 +419,7 @@ async function main() {
 
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("nav-slot").innerHTML = appbar("fleet");
+  document.getElementById("foot-slot").innerHTML = footer();
   main();
 });
 </script>

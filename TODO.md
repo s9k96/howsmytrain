@@ -70,6 +70,51 @@ Sparse trains exempt. ~20 lines in `scripts/poll_due.py`.
 (a Vande Bharat that's on time every day teaches nothing) rather than sampling
 all of them. Needs no code.
 
+### User-requested trains — designed, not built
+
+Let a visitor enter any train number. If it's already tracked, serve what we
+have. If not, it joins the fleet: the next poller tick reads it once, which
+teaches us its schedule, and from then on it's an ordinary tracked train polled
+near its arrival. Nothing is fetched at request time.
+
+**Most of this already exists.** `_due_now` polls a train with no known
+`scheduled_arrival` exactly once, then falls back to a 12 h guard so it can't
+loop (`test_unknown_schedule_is_polled_to_learn_it`). `poller.py` extracts
+source, destination, both times, `run_days` and `arrival_day_offset` from that
+first response and upserts them. `docs/index.html` already renders the
+in-between state as *Awaiting first data*.
+
+**The cost is recurring, not per-lookup.** Each train added costs one request
+per running day, forever — so the cap belongs on *fleet size*, not on requests
+per day. Demand by weekday as of 2026-08-02, with every `run_days` learned:
+
+| mon | tue | wed | thu | fri | sat | sun |
+|---|---|---|---|---|---|---|
+| 31 | 31 | 27 | 31 | **34** | 32 | 33 |
+
+Against the 50/day cap, holding ~6 back for failure retries, the ceiling is
+about 44 — **room for roughly 10 more daily trains, total**. A train running
+one day a week costs a seventh of that. Past the ceiling, the rotating sample
+above is what buys more room.
+
+**One blocker.** The fleet is not read from the database:
+`poll_due.main` takes it from `config.require_train_numbers()`, the
+`TRAIN_NUMBERS` Actions variable, and `store.list_trains()` only supplies
+schedule metadata for numbers already on that list. Inserting a row into
+`trains` does nothing today. Needs the configured list unioned with requested
+trains, capped by remaining budget.
+
+**Shape:** a `train_requests` table with an anon INSERT policy and a
+`CHECK (train_number ~ '^\d{4,5}$')`; ~15 lines in `poll_due.py` to promote
+pending requests; a request box on the fleet page. No Edge Function and no API
+key in the browser, because nothing is fetched at request time — which also
+means spam costs rows rather than quota, since the poller decides how many to
+promote.
+
+**Undecided:** at the ceiling, reject ("fleet full") or queue? Queueing is
+friendlier but requests can then sit indefinitely, so it needs an honest status
+in the UI rather than a silent pending state.
+
 ### Confirm the sparse trains are worth their slot
 05576 (thu only), 13066 (sat only), 05580 (tue/sun) each cost 1–2 requests a
 week now, so they're nearly free — but confirm they produce usable journeys
@@ -107,7 +152,13 @@ train since its window opened?" — both sides of which are poll times we
 control. Replaying the seven real ticks against the new logic yields one call.
 A failed poll still writes no row, so the window keeps retrying it.
 
-### ~~`daily_delays` prefers the latest poll over a usable one~~ — code fixed, **SQL still to run**
+**Verified in production 2026-08-01.** Over the first day under the new logic:
+32 journeys, 32 polls, zero spent on re-polls. The 16 long-haul journeys
+(`arrival_day_offset > 0`) — the shape that caused the bug — took exactly one
+poll each, 12621 included. Daily spend now tracks weekday demand instead of
+running ahead of it.
+
+### ~~`daily_delays` prefers the latest poll over a usable one~~ — fixed, live 2026-07-31
 A later poll with a null `delay_minutes` used to hide an earlier one that had a
 number, so the whole journey reported no delay. Both twins now prefer the last
 poll that actually measured something and fall back to the plain latest only
@@ -117,15 +168,16 @@ when every poll is null:
 - `app/db.py:list_journey_final_delays` — the `COALESCE(MAX(CASE WHEN ...))` twin
 - covered by two cases in `tests/test_aggregate.py`
 
-**The Postgres view is not live yet.** PostgREST cannot run DDL and there is no
-DB password in `.env`, so the `create or replace view daily_delays ...` block in
-`supabase/schema.sql` has to be pasted into the Supabase SQL editor by hand. It
-is safe to re-run: the column list is unchanged, so `train_summary` and
-`weekly_stats` keep working.
+The view was pasted into the Supabase SQL editor by hand on 2026-07-31 —
+PostgREST cannot run DDL and there is no DB password in `.env`, so any future
+change to `supabase/schema.sql` needs the same manual step. Re-running it is
+safe: the column list is unchanged, so `train_summary` and `weekly_stats`
+keep working.
 
-Replayed against all 97 stored journeys, it changes exactly one: 12621's
-2026-07-29 run, `null -> 20 min`. The other 9 nulls are journeys where no poll
-ever carried a delay, which is the honest answer.
+Predicted against all 97 stored journeys it changed exactly one, and that is
+what it did: 12621's 2026-07-29 run went `null -> 20 min`, fleet-wide nulls
+10 -> 9. The remaining 9 are journeys where no poll ever carried a delay,
+which is the honest answer.
 
 Note it does **not** address a journey drifting across several non-null
 readings (12723 on 2026-07-31 was polled 6 times, 27→9, and the latest wins
@@ -220,6 +272,44 @@ come from, and `train.runDays` too. Strip the array, keep the derived fields.
 
 - `app/poller.py:158` — fixed 7s delay between API calls rather than a token
   bucket. Swap if the burst cap changes or a run needs >40 trains.
+
+## Watching
+
+### Transient RailRadar failures come in bursts
+A poll can fail against a healthy pipeline: the workflow's earlier steps pass,
+`record_run` writes, and `poll_train` caught a `RailRadarError`. The window
+retries on the next tick and it self-heals, so no journey has been lost yet —
+but each attempt spends a request.
+
+| date | calls | failed | |
+|---|---|---|---|
+| 07-28 | 28 | 0 | |
+| 07-29 | 27 | 1 | 12049, recovered 14 min later |
+| 07-30 | 31 | 0 | |
+| 07-31 | 41 | 0 | |
+| 08-01 | 33 | 6 | **one burst, 17:30–18:15**, hit 15274 then 22448 |
+
+The 08-01 cluster is the shape to watch: five consecutive ticks failing, six
+attempts to land two readings that both arrived anyway at 18:30. A one-off is
+noise; a second burst is a trend.
+
+**We don't record what a failure was.** `poll_train` returns False for all of:
+network error (DNS, refused, 15 s timeout), HTTP 429, any other HTTP >= 400,
+a non-JSON body, and `success: false` on a 2xx. `record_run` stores one
+integer, so the cause is not recoverable from the database — and the cost
+isn't either, since a connection that never reached RailRadar spends no quota
+while a 500 does. The 08-01 burst cost somewhere between 0 and 6 requests.
+
+Timing does rule out both rate limits for that burst: 22 of 50 requests were
+spent by 17:30, and the failing runs made one call each 15 minutes apart, so
+neither the daily cap nor the 10/min burst applies. That leaves network, 5xx,
+or `success: false`.
+
+**Cheapest fix, if this recurs:** record the status code (or `network`) on
+`poller_runs`, so the next burst is diagnosable without the Actions log —
+which needs auth to read, the API returns 403 anonymously. Backing off rather
+than retrying every tick is the follow-on: a 100-minute window currently
+offers ~7 free attempts, which is exactly wrong when upstream is down.
 
 ## Operational
 

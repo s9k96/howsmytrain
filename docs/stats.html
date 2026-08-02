@@ -140,6 +140,8 @@
       </p>
     </section>
   </main>
+
+  <div id="foot-slot"></div>
 </div>
 
 <script>
@@ -439,6 +441,7 @@ function setMinRuns(n) {
 
 async function main() {
   document.getElementById("nav-slot").innerHTML = appbar("stats");
+  document.getElementById("foot-slot").innerHTML = footer();
   if (!configured()) {
     document.getElementById("subtitle").textContent = "Awaiting Supabase config";
     setPolled(null, "NOT CONFIGURED");

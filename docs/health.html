@@ -13,6 +13,44 @@
   .cov .bar-track { flex: 1; }
   .miss { font-size: 11.5px; color: var(--text-3); }
   .miss b { color: var(--late); font-weight: 600; }
+
+  /* ---- Weekly polling load ------------------------------------------------
+     Bars are a share of the 50/day API cap, never of the busiest day: the
+     headroom IS the point, and normalising to the max would draw a full bar
+     on a quiet week. The track's dashed top edge is the cap. */
+  .loadbars { align-items: end; }
+  .loadbars > div { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+  .loadbars .v { font: 500 12px/1 var(--mono); color: var(--text-2); text-align: center; }
+  /* The track is drawn, not implied: its filled height is the whole 50, so
+     the empty part above each bar is the headroom you have left. Without it
+     seven mid-height bars say nothing about how close the cap is. */
+  .loadbars .track {
+    height: 108px;
+    display: flex;
+    align-items: flex-end;
+    background: var(--track);
+    border-top: 1px dashed rgba(244, 242, 238, 0.22);
+  }
+  .loadbars i { display: block; width: 100%; background: var(--bar-neutral-strong); min-height: 2px; }
+  .loadbars .warn i { background: var(--late); }
+  .loadbars .bad  i { background: var(--severe); }
+  .loadbars .warn .v { color: var(--late); }
+  .loadbars .bad  .v { color: var(--severe); }
+  .loadbars .today .v { color: var(--text); }
+  .loadbars .today i { background: var(--text); }
+
+  .load-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 9px; }
+  .load-cap { font: 400 10px/1.2 var(--mono); letter-spacing: 0.08em; color: var(--text-3); }
+
+  /* styles.css drops .week.days to gap:5px here. This row is .week.loadbars,
+     so it keeps the base 10px unless told otherwise -- and the day labels
+     would then sit out of line with the bars they belong to. */
+  @media (max-width: 720px) {
+    .week.loadbars { gap: 5px; }
+    .loadbars .track { height: 84px; }
+    .loadbars .v { font-size: 10px; }
+    .load-head { flex-direction: column; align-items: flex-start; gap: 3px; }
+  }
 </style>
 </head>
 <body>
@@ -39,10 +77,23 @@
     </div>
 
     <div class="card">
+      <div class="card-head"><h2>Weekly polling load</h2></div>
+      <p class="waiting-note">
+        One tracked train costs one request on each day it <em>arrives</em>, so
+        this is the shape of the week against RailRadar's 50/day cap. Trains
+        whose run days we haven't learned yet count on every day, because that
+        is how they are polled until the first response teaches us otherwise.
+      </p>
+      <div id="load"></div>
+    </div>
+
+    <div class="card">
       <div class="card-head"><h2>Trains needing attention</h2></div>
       <div class="table-scroll" id="attention"></div>
     </div>
   </main>
+
+  <div id="foot-slot"></div>
 </div>
 
 <script>
@@ -69,6 +120,54 @@ function coverageBar(actual, expected) {
       <div class="bar-track"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>
       <span class="d-${cls}">${pct}%</span>
     </div>`;
+}
+
+const API_CAP = 50;   // RailRadar free tier, see app/railradar.py
+
+/**
+ * How many requests each weekday costs, against the cap.
+ *
+ * Counted through arrivesOn() rather than off run_days directly: run_days are
+ * DEPARTURE days and we poll at arrival, so an overnight train departing
+ * Friday spends its request on Saturday. Reading the raw array here would put
+ * the load on the wrong day for all 21 offset services.
+ */
+function renderLoad(trains, now) {
+  // Monday of the current week, so the seven dates line up with the labels.
+  const monday = new Date(now);
+  monday.setDate(monday.getDate() - ((now.getDay() + 6) % 7));
+  const days = WEEK.map((_, i) => {
+    const d = new Date(monday);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
+
+  const counts = days.map(d => trains.filter(t => arrivesOn(t, d)).length);
+  const peak = Math.max(...counts);
+  const todayKey = weekKey(now);
+
+  document.getElementById("load").innerHTML = `
+    <div class="load-head">
+      <span class="load-cap">BUSIEST ${WEEK[counts.indexOf(peak)].toUpperCase()} · ${peak} OF ${API_CAP}
+        · ${Math.max(0, API_CAP - peak)} SPARE</span>
+      <span class="load-cap">50/DAY API CAP</span>
+    </div>
+    <div class="week loadbars">${counts.map((n, i) => {
+      // Against the cap, not against each other.
+      const pctOfCap = n / API_CAP;
+      const cls = pctOfCap > 0.9 ? "bad" : pctOfCap > 0.7 ? "warn" : "";
+      const today = WEEK[i] === todayKey ? " today" : "";
+      return `<div class="${cls}${today}">
+        <span class="v">${n}</span>
+        <span class="track" title="${n} of ${API_CAP} requests">
+          <i style="height:${Math.min(100, Math.max(1, pctOfCap * 100)).toFixed(1)}%"></i>
+        </span>
+      </div>`;
+    }).join("")}</div>
+    <div class="week days">${WEEK.map(d => {
+      const isToday = d === todayKey;
+      return `<span class="${isToday ? "today" : ""}">${isToday ? "TODAY" : d.toUpperCase()}</span>`;
+    }).join("")}</div>`;
 }
 
 function render(trains, polls, runs, now) {
@@ -180,12 +279,15 @@ function render(trains, polls, runs, now) {
       </table>`;
   wireRows(document.getElementById("attention"));
 
+  renderLoad(trains, now);
+
   document.getElementById("subtitle").textContent =
     `${trains.length} trains · last ${DAYS_BACK} days · checked ${now.toLocaleTimeString()}`;
 }
 
 async function main() {
   document.getElementById("nav-slot").innerHTML = appbar("health");
+  document.getElementById("foot-slot").innerHTML = footer();
   if (!configured()) {
     document.getElementById("subtitle").textContent = "Awaiting Supabase config";
     setPolled(null, "NOT CONFIGURED");

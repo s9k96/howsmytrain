@@ -42,6 +42,8 @@
       <div class="db-scroll" id="table-container"></div>
     </div>
   </main>
+
+  <div id="foot-slot"></div>
 </div>
 
 <script>
@@ -124,6 +126,7 @@ async function load() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("nav-slot").innerHTML = appbar("db");
+  document.getElementById("foot-slot").innerHTML = footer();
   const box = document.getElementById("train-filter");
   try {
     const trains = await sb("trains", "select=train_number,name&order=train_number");

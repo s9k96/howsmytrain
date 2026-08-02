@@ -315,6 +315,24 @@ function appbar(current) {
 }
 
 /**
+ * Provenance line, on every page.
+ *
+ * The numbers here look official and are not: they come from a third party
+ * reading a live feed, and a train reported on time can still be late. Saying
+ * so once per page is the cheapest way to keep the site honest about what it
+ * is — and it belongs beside every table, not only the homepage, since a
+ * deep link into a train page is just as likely to be someone's entry point.
+ */
+function footer() {
+  return `
+  <footer class="sitefoot">
+    <span>Delay data via <a href="https://railradar.in" target="_blank"
+      rel="noopener noreferrer">RailRadar</a> (unofficial, not Indian
+      Railways). Treat as indicative, not authoritative.</span>
+  </footer>`;
+}
+
+/**
  * Show when the pipeline last ran. The dot goes amber then coral as the gap
  * widens: the cron fires every 15 minutes, so an hour of silence is a fault
  * and the page should say so rather than keep showing a confident figure.
