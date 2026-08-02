@@ -18,7 +18,7 @@ vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, "common.js"), "utf8"), ctx);
 const { journeyState, fmtDelay, scaleOf, shiftTime, runDaysText, band,
         arrivalGap, arrivalMinutes, fmtDuration,
-        journeyMinutes, delayShare, dayOffset, scheduleStack } = ctx;
+        journeyMinutes, delayShare, dayOffset, scheduleStack, median } = ctx;
 
 const DAILY = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const day   = { scheduled_departure: "06:00:00", scheduled_arrival: "12:00:00", arrival_day_offset: 0, run_days: DAILY };
@@ -44,6 +44,35 @@ for (const [name, train, now, want] of cases) {
   const j = journeyState(train, new Date(now));
   assert.strictEqual(j ? `${j.key}/${Math.round(j.pct)}` : "null", want, name);
 }
+
+// ---- journeyState with a live reading --------------------------------------
+// The timetable alone calls a late train "Completed" the moment its scheduled
+// arrival passes. 05580 sat like that for ten and a half hours on 2026-07-29.
+// A poll's own status is what fixes it.
+const readCases = [
+  // `day` is 06:00 -> 12:00. At 13:00 the clock says done.
+  ["no reading keeps the clock",  null,                                  "2026-07-28T13:00", "done/100"],
+  ["running + delay overrides",   { status: "running", delay_minutes: 120 }, "2026-07-28T13:00", "running/88"],
+  ["...until the delay elapses",  { status: "running", delay_minutes: 120 }, "2026-07-28T14:01", "done/100"],
+  ["completed settles it early",  { status: "completed", delay_minutes: 0 }, "2026-07-28T09:00", "done/100"],
+  // No vocabulary for a cancellation, so it must not silently become a state.
+  ["cancelled falls back",        { status: "cancelled", delay_minutes: 5 }, "2026-07-28T13:00", "done/100"],
+  ["running w/o delay falls back",{ status: "running", delay_minutes: null }, "2026-07-28T13:00", "done/100"],
+  ["unknown status falls back",   { status: "diverted", delay_minutes: 30 }, "2026-07-28T13:00", "done/100"],
+  // Mid-journey the reading agrees with the clock and must not disturb it.
+  ["running mid-journey",         { status: "running", delay_minutes: 0 },   "2026-07-28T09:00", "running/50"],
+];
+for (const [name, reading, now, want] of readCases) {
+  const j = journeyState(day, new Date(now), reading);
+  assert.strictEqual(j ? `${j.key}/${Math.round(j.pct)}` : "null", want, name);
+}
+
+// The progress track must keep moving while a late train is still out there,
+// not pin at 100% the instant the scheduled arrival passes.
+const late = { status: "running", delay_minutes: 120 };
+const p1 = journeyState(day, new Date("2026-07-28T12:30"), late).pct;
+const p2 = journeyState(day, new Date("2026-07-28T13:30"), late).pct;
+assert.ok(p1 < p2 && p2 < 100, `track should advance, got ${p1} then ${p2}`);
 
 // ---- Delay scale and formatting -------------------------------------------
 
@@ -145,4 +174,29 @@ assert.ok(stack.indexOf("&minus;1") < stack.indexOf("06:00"),
 assert.ok(stack.indexOf("22:00") < stack.indexOf("&minus;1"),
           "offset must follow the departure time");
 
-console.log(`${cases.length} journeyState cases + 56 scale/format/timetable/share/offset cases pass`);
+// ---- median ----------------------------------------------------------------
+// Shared by the hero figure, the train page KPIs and the stats table, so an
+// error here is wrong in three places at once.
+assert.strictEqual(median([]), null);
+assert.strictEqual(median([7]), 7);
+assert.strictEqual(median([9, 1, 5]), 5);      // numeric sort, not lexical
+assert.strictEqual(median([10, 2]), 6);        // even length -> mean of middle two
+assert.strictEqual(median([100, 20, 3]), 20);  // "100" < "20" as strings: the trap
+
+// Must not reorder the caller's array -- index.html renders from the same list.
+const unsorted = [30, 10, 20];
+median(unsorted);
+assert.deepStrictEqual(unsorted, [30, 10, 20]);
+
+// The hero's actual statistic: median of the journeys that lost time. Today's
+// real readings, where the mean (8) describes none of the fifteen services.
+const todayReadings = [0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 6, 12, 13, 27, 51];
+const lostTime = todayReadings.filter(d => d > 0);
+assert.strictEqual(median(lostTime), 12.5);
+assert.strictEqual(lostTime.length, 6);
+// A day where nothing ran late has no typical delay -- the hero shows a dash
+// rather than inventing a zero.
+assert.strictEqual(median([0, 0, 0].filter(d => d > 0)), null);
+
+console.log(`${cases.length + readCases.length} journeyState cases `
+  + `(${readCases.length} with a live reading) + 66 other cases pass`);

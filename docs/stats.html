@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fleet statistics · HowsMyTrain</title>
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
 <meta name="theme-color" content="#0c0c0d">
 <link rel="stylesheet" href="./styles.css">
 <script src="./common.js"></script>
@@ -183,13 +184,6 @@ function binOf(share) {
 }
 
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
-
-function median(xs) {
-  if (!xs.length) return null;
-  const s = [...xs].sort((a, b) => a - b);
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-}
 
 // ---------------------------------------------------------------------------
 // Columns

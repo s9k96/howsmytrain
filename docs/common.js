@@ -111,6 +111,21 @@ function arrivalMinutes(t) {
   return h * 60 + m;
 }
 
+/**
+ * Middle value, or the mean of the middle two. Null for an empty list.
+ *
+ * The delay distribution is heavily skewed -- three journeys of two summer
+ * specials hold about half of every minute ever recorded -- so a mean says
+ * more about those than about the fleet. Prefer this wherever a headline
+ * number stands in for "a typical journey".
+ */
+function median(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
 /** Compact duration: "45M", "6H10", "30H15". */
 function fmtDuration(m) {
   return m < 60 ? `${m}M` : `${Math.floor(m / 60)}H${String(m % 60).padStart(2, "0")}`;
@@ -179,17 +194,28 @@ function delayShare(delayMinutes, t) {
 const JOURNEY_STATES = { before: "Not departed", running: "En route", done: "Completed" };
 
 /**
- * Where a train is in today's journey, from the timetable alone.
+ * Where a train is in today's journey.
  *
  * Returns null unless the train arrives today, which keeps it honest when
  * "Today only" is off and the table mixes in trains that aren't running.
  *
- * ponytail: schedule-based, not live -- a train 40 minutes late still reads
- * "Arrived" once its scheduled arrival passes. It answers "should this be
- * done by now?", which is what decides whether a delay figure is final. Swap
- * in the last poll's status if that stops being good enough.
+ * `reading` is the last poll for today's run, if there is one. Supply it: the
+ * timetable alone cannot see a late train, so a service two hours down used to
+ * flip to "Completed" on the stroke of its scheduled arrival and sit there
+ * while it was still moving. That was not a rare edge -- 9 of the first 90
+ * journeys ran more than an hour late, and 05580 on 2026-07-29 was labelled
+ * Completed for ten and a half hours. It was worst precisely where it mattered
+ * most, since a badly delayed train is the one you would look up.
+ *
+ * Trust order: an explicit `completed` from RailRadar settles it. A `running`
+ * reading holds only until the delay it was carrying has itself elapsed --
+ * after that the reading is stale (a train seen running at 06:30 has almost
+ * certainly arrived by evening) and the clock is the better guess again.
+ * `cancelled`, and anything unrecognised, fall through to the timetable: the
+ * three states here have no vocabulary for a cancellation, and inventing one
+ * silently would be worse than saying nothing.
  */
-function journeyState(t, now = new Date()) {
+function journeyState(t, now = new Date(), reading = null) {
   if (!t.scheduled_departure || !t.scheduled_arrival || !arrivesOn(t, now)) return null;
 
   const [h, m] = String(t.scheduled_arrival).split(":").map(Number);
@@ -199,8 +225,23 @@ function journeyState(t, now = new Date()) {
   // overnight rollback lives in exactly one place (journeyMinutes).
   const dep = new Date(arr.getTime() - journeyMinutes(t) * 60000);
 
-  const key = now < dep ? "before" : now < arr ? "running" : "done";
-  const pct = Math.max(0, Math.min(100, (100 * (now - dep)) / (arr - dep)));
+  let key = now < dep ? "before" : now < arr ? "running" : "done";
+  // What the progress track fills towards. A late train's track should run to
+  // where it is actually expected, or the bar pins at 100% and stops saying
+  // anything while the train is still out there.
+  let end = arr;
+
+  const status = reading && reading.status;
+  const delay = reading && reading.delay_minutes;
+  if (status === "completed") {
+    key = "done";
+  } else if (status === "running" && delay !== null && delay !== undefined) {
+    const due = new Date(arr.getTime() + delay * 60000);
+    if (now < due) { key = "running"; end = due; }
+  }
+
+  const pct = key === "done" ? 100
+    : Math.max(0, Math.min(100, (100 * (now - dep)) / (end - dep)));
   return { key, label: JOURNEY_STATES[key], pct };
 }
 

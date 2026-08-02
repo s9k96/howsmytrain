@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Train · HowsMyTrain</title>
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
 <meta name="theme-color" content="#0c0c0d">
 <link rel="stylesheet" href="./styles.css">
 <script src="./vendor/chart.umd.min.js"></script>
@@ -102,13 +103,6 @@ function delayClass(m) {
   if (m <= 10) return "on-time";
   if (m <= 30) return "late";
   return "very-late";
-}
-
-function median(xs) {
-  if (!xs.length) return null;
-  const s = [...xs].sort((a, b) => a - b);
-  const mid = s.length >> 1;
-  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
 // Just the class name -- common.js's band() returns {cls, text} and would
@@ -303,8 +297,13 @@ function renderDistribution(delays) {
  * Deliberately excludes number/name (the page title) and the delay averages
  * (the KPI row) -- repeating them was what made this card mostly whitespace.
  */
-function renderDetails(t) {
-  const j = journeyState(t);
+function renderDetails(t, polls = []) {
+  // Only a reading from today can speak to today's journey; polls arrive
+  // newest-first, so [0] is the candidate and anything older is history.
+  const latest = polls[0];
+  const fresh = latest && isoDate(new Date(latest.polled_at)) === isoDate(new Date())
+    ? latest : null;
+  const j = journeyState(t, new Date(), fresh);
   const route = (t.source_code || t.destination_code)
     ? `${esc(t.source_code || "?")} → ${esc(t.destination_code || "?")}`
     : "unknown";
@@ -400,7 +399,7 @@ async function main() {
               true);
     renderContext(summary, fleet);
     renderKPIs(summary, delays);
-    renderDetails(summary);
+    renderDetails(summary, polls);
     renderDaily(daily);
     renderPolls(polls);
     try {

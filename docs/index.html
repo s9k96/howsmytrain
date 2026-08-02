@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HowsMyTrain</title>
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
 <meta name="theme-color" content="#0c0c0d">
 <link rel="stylesheet" href="./styles.css">
 <script src="./common.js"></script>
@@ -103,9 +104,11 @@ function rowsFor(range) {
     // never having polled -- and only the latter may fall back to the
     // timetable. Without this a polled-but-unreadable run reads as hours late.
     const polled = Object.prototype.hasOwnProperty.call(todayPoll, t.train_number);
-    const delay = range === "today" ? (polled ? todayPoll[t.train_number] : null)
+    const reading = todayPoll[t.train_number] || null;
+    const delay = range === "today" ? (polled ? reading.delay_minutes : null)
                                     : (seen.length ? Math.round(mean(seen)) : null);
-    return { t, delay, polled, observed: seen.length, state: journeyState(t, now) };
+    return { t, delay, polled, observed: seen.length,
+             state: journeyState(t, now, reading) };
   }).filter(r =>
     range === "today"
       ? r.t.journeys_observed > 0 && arrivesOn(r.t, now)
@@ -133,30 +136,60 @@ function byJourney(a, b) {
 // Hero -- always today, whatever the list is aggregating
 // ---------------------------------------------------------------------------
 function renderHero() {
-  const todayDelay = (t) => todayPoll[t.train_number];
+  const todayDelay = (t) => (todayPoll[t.train_number] || {}).delay_minutes;
   const scheduled = summary.filter(t => arrivesOn(t, new Date()));
   const observed = scheduled
     .map(t => ({ t, delay: todayDelay(t) }))
     .filter(x => x.delay !== null && x.delay !== undefined);
 
-  const avg = observed.length ? Math.round(mean(observed.map(x => x.delay))) : null;
+  // ---- The headline figure -------------------------------------------------
+  // Median of the journeys that actually lost time, not a mean over everything.
+  //
+  // A mean over all readings describes no real train: today's fifteen are
+  // 0,0,0,0,0,0,0,0,0,5,6,12,13,27,51 -- mean 8, yet nine were exactly on time
+  // and the late ones averaged 26. Dropping the zeros alone would swing it the
+  // other way and claim the fleet runs half an hour down on a day most of it
+  // was punctual, so the on-time COUNT carries that half of the story instead
+  // (the rail beside this, and the note below).
+  //
+  // Median rather than mean because the tail is extreme: three journeys of two
+  // summer specials hold roughly half of every delay minute on record.
+  //
+  // Note the two cuts differ on purpose. "Lost time" is any delay above zero;
+  // "on time" is the DB's <= 10 min rule. A train 6 minutes down is counted
+  // both as on time and as having lost time, because both are true.
+  const delayed = observed.filter(x => x.delay > 0);
+  const typical = delayed.length ? Math.round(median(delayed.map(x => x.delay))) : null;
   const onTime = observed.filter(x => band(x.delay).cls === "good").length;
   const worst = observed.reduce((w, x) => (w && w.delay >= x.delay ? w : x), null);
 
   // Same-day comparison against the trailing week, excluding today so the
-  // baseline isn't partly the number it's being compared with.
+  // baseline isn't partly the number it's being compared with. Same statistic
+  // on both sides -- comparing today's median against a weekly mean would
+  // report a change that is only a change of definition.
   const prior = lastDays(8).slice(0, 7)
     .flatMap(d => summary.map(t => (byTrain[t.train_number] || {})[d]))
-    .filter(v => v !== null && v !== undefined);
-  const weekAvg = prior.length ? mean(prior) : null;
-  const delta = avg !== null && weekAvg !== null ? Math.round(avg - weekAvg) : null;
+    .filter(v => v !== null && v !== undefined && v > 0);
+  const weekTypical = prior.length ? median(prior) : null;
+  const delta = typical !== null && weekTypical !== null
+    ? Math.round(typical - weekTypical) : null;
 
   const note = !observed.length
     ? "Not enough data yet — the weekly view needs a few days of polling."
+    : !delayed.length
+    ? `All ${observed.length} service${observed.length === 1 ? "" : "s"} polled since midnight ran to time.`
     : [
-        `Across ${observed.length} tracked service${observed.length === 1 ? "" : "s"} polled since midnight.`,
-        // "On time" is the DB's <= 10 min rule, so don't claim "to the minute".
-        onTime ? `${onTime} ran on time.` : null,
+        // The first two numbers must PARTITION the readings, or the sentence
+        // invites adding them up: "12 lost time, 17 on time" out of 24 reads
+        // as broken arithmetic, because the five services 1-10 min down are
+        // in both. So the pair here is lost-time vs exactly-on-schedule, and
+        // the 10-minute rule is stated separately as the overlapping measure
+        // it is.
+        `${delayed.length} of ${observed.length} service${observed.length === 1 ? "" : "s"} polled since midnight lost time,`,
+        `${observed.length - delayed.length} ran exactly to schedule.`,
+        // Two delayed journeys make a "median" that is just those two averaged,
+        // so the count above is what stops it reading as a settled figure.
+        onTime ? `${onTime} were inside the 10-minute on-time mark.` : null,
         worst && worst.delay > 120 ? "One is over two hours down." : null,
       ].filter(Boolean).join(" ");
 
@@ -164,8 +197,8 @@ function renderHero() {
     <div>
       <div class="hero-eyebrow" id="hero-eyebrow">HOW LATE IS MY TRAIN — TODAY</div>
       <div class="hero-figure">
-        <span class="v">${avg === null ? "—" : avg}</span>
-        ${avg === null ? "" : `<span class="u">min late, on average</span>`}
+        <span class="v">${typical === null ? "—" : typical}</span>
+        ${typical === null ? "" : `<span class="u">min late, typically</span>`}
       </div>
       <p class="hero-note">${esc(note)}</p>
     </div>
@@ -195,7 +228,7 @@ function renderHero() {
         <span class="v" style="color:var(--text-3)">—</span>
       </div>`}
       <div class="rail-row">
-        <span class="k">VS 7-DAY AVG</span>
+        <span class="k">VS 7-DAY TYPICAL</span>
         <span class="v" style="color:${delta === null ? "var(--text-3)" : delta <= 0 ? "var(--ontime)" : "var(--severe)"}">
           ${delta === null ? "—" : `${delta <= 0 ? "−" : "+"}${Math.abs(delta)} min`}</span>
       </div>
@@ -243,10 +276,19 @@ function renderStates(rows) {
   const counts = { running: 0, done: 0, before: 0 };
   for (const r of rows) if (r.state) counts[r.state.key]++;
 
+  // These come from the timetable, not from polling, so they will not agree
+  // with the hero's count of readings -- a train can be COMPLETED here and
+  // still have no delay on file, because its poll failed or hasn't landed.
+  // The titles say so, since the two numbers sit inches apart on the page.
+  const why = {
+    running: "Scheduled to be under way now. From the timetable, not a live position.",
+    done: "Scheduled arrival has passed. Says nothing about whether we got a reading.",
+    before: "Not yet due to depart.",
+  };
   el.innerHTML = counts.running + counts.done + counts.before === 0 ? "" :
     ["running", "done", "before"].map(k => `
       <button type="button" class="${k}" data-state="${k}"
-              aria-pressed="${stateFilter === k}">
+              title="${why[k]}" aria-pressed="${stateFilter === k}">
         <i aria-hidden="true"></i>${counts[k]} ${STATE_LABEL[k]}
       </button>`).join("");
 
@@ -433,8 +475,11 @@ async function load() {
   try {
     const [rows, hist, runs] = await Promise.all([
       sb("train_summary", "select=*&order=train_number"),
+      // `status` is what lets journeyState() see a late train still running,
+      // instead of calling it Completed the moment the clock passes its
+      // scheduled arrival.
       sb("daily_delays",
-         `select=train_number,journey_date,delay_minutes,polled_at&journey_date=gte.${isoDate(since)}&order=journey_date`),
+         `select=train_number,journey_date,delay_minutes,status,polled_at&journey_date=gte.${isoDate(since)}&order=journey_date`),
       // The heartbeat, not the last poll, says the scheduler is alive: most
       // runs correctly find nothing due and write no poll row at all.
       sb("poller_runs", "select=ran_at&order=ran_at.desc&limit=1").catch(() => []),
@@ -452,7 +497,8 @@ async function load() {
       // today lookup would silently report all 21 offset>0 trains as unpolled.
       // polled_at is near arrival under either convention. See TODO.md.
       if (isoDate(new Date(r.polled_at)) === todayKey()) {
-        todayPoll[r.train_number] = r.delay_minutes;
+        // The whole row, not just the delay: journeyState() needs `status`.
+        todayPoll[r.train_number] = r;
       }
     }
 

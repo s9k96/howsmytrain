@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img"
+     aria-label="HowsMyTrain">
+  <title>HowsMyTrain</title>
+  <!--
+    Four ascending bars in the delay scale, the same shape as the sparkbars on
+    every register row and the distribution on the stats page.
+
+    Carries its own dark ground rather than sitting on transparency: the site
+    is dark only, but a browser tab bar may be either, and a mark that assumed
+    a dark backdrop would disappear for half the people looking at it.
+
+    Colours are the computed hex fallbacks of the oklch() delay scale in
+    styles.css, written as literals because an SVG loaded as a favicon has no
+    access to the page's custom properties. If that scale changes, change
+    these too.
+
+    Note for editors: this is XML, so a double hyphen is not allowed anywhere
+    inside a comment. Use commas or colons where the rest of the codebase
+    would reach for a dash, or the file silently stops parsing and every tab
+    shows a broken icon.
+  -->
+  <rect width="32" height="32" rx="7" fill="#0c0c0d"/>
+  <rect x="4"  y="20" width="5" height="7"  fill="#67d283"/>
+  <rect x="11" y="15" width="5" height="12" fill="#e2d064"/>
+  <rect x="18" y="10" width="5" height="17" fill="#f7ac4d"/>
+  <rect x="25" y="5"  width="5" height="22" fill="#ef6661"/>
+</svg>
