@@ -183,6 +183,29 @@ Note it does **not** address a journey drifting across several non-null
 readings (12723 on 2026-07-31 was polled 6 times, 27→9, and the latest wins
 either way). That was the re-polling, fixed by the dedup change above.
 
+### ~~Cancelled runs counted as on-time journeys~~ — code fixed, **SQL still to run**
+RailRadar reports a cancelled service with `delay=0`, which `daily_delays` read
+as a flawless journey. 12553 has come back `cancelled` on **all 13 polls it has
+ever received** — it is not running at all — and each one was being counted as
+an on-time run. Fleet on-time went 67.1% → 66.0% once excluded; small, but it
+could only ever grow, and 12553's own page claimed 100% punctuality for a train
+that has never moved.
+
+- `supabase/schema.sql` — `and p.status is distinct from 'cancelled'`
+- `app/db.py` — `_REAL_JOURNEY` now filters both statuses. The SQLite twin
+  previously filtered *neither*, so this closes a divergence as well.
+- three cases in `tests/test_aggregate.py`
+
+`is distinct from` rather than `not in`: a null status must survive, and
+`status not in (...)` evaluates to null — dropping the row — when status is null.
+
+**Paste the `create or replace view daily_delays` block into the Supabase SQL
+editor.** PostgREST cannot run DDL and there is no DB password in `.env`. Safe
+to re-run: the column list is unchanged.
+
+Still open: 12553 costs a request a day to be told "cancelled" again. Decide
+whether it keeps its slot.
+
 ### RailRadar returns the wrong run for services longer than 24 h
 Separate from the dedup, and not fixed. Polling near arrival is supposed to
 catch a near-final delay, but for the 12 long-haul services the endpoint may
@@ -203,14 +226,49 @@ rows age out. Keying on `journey_date == today` would drop every long-haul train
 from the TODAY view. The row sparkbars and the weekly panel still bucket by
 `journey_date` and read a day early for those trains meanwhile.
 
-### The due window still clips at midnight
-`_window` in `scripts/poll_due.py` ends a window at 23:59 rather than letting
-it wrap. Wrapping is now *cheap* as well as safe: dedup keys on poll time, so
-it no longer has to agree with anything about which date a journey belongs to —
-`_window` just has to return a span that may cross midnight.
+### ~~The due window still clips at midnight~~ — fixed 2026-08-05
+`_window` now returns the window *containing* now, checking yesterday's
+arrival as well as today's, so a span may cross midnight. 20978 (arriving
+23:58) is read at its real time instead of up to 45 min early. Done as part of
+the follow-up-poll change below, which needs wrapping to be able to shift an
+evening train's window into the next day.
 
-Worth doing only if the accuracy matters: the clip costs one train (20978,
-arriving 23:58) a reading up to ~45 min early, and nothing else in the fleet.
+### ~~A delay recorded from a still-running poll is a floor, not a result~~ — fixed 2026-08-05
+The window was anchored to a scheduled arrival a late train was never going to
+make, so it closed 90 minutes after a moment the train might still be hours
+from. The only reading ever taken was a lower bound: 22 of the first 239
+journeys, including 05580 recorded at `+630` with 630 minutes still left to
+run, and 12423 at `+318` with 326 to go. Those same journeys hold about half
+of every delay minute on file, so the fleet average was built on numbers that
+were systematically low.
+
+**The fix** shifts the window by the delay the train was last seen carrying,
+so the follow-up lands near the arrival that is actually going to happen. No
+new dedup was needed: the rule is "have we read this train since its window
+opened?", and the earlier poll necessarily precedes the shifted window, so the
+train simply becomes due again.
+
+**What it cost, replayed against 11 days of real poll history** (writing
+simulated polls back so dedup applies — without that write-back the first
+measurement read 135/day, which was the harness double-counting a window, not
+the change):
+
+| | calls/day | peak |
+|---|---|---|
+| before | 30.6 | 37 |
+| after | 32.0 | 39 |
+
+**The threshold is what makes it affordable.** Shifting on *any* delay came
+out at 42/day with a peak of 49 against the 50 cap, because a train five
+minutes down had its window nudged five minutes and became due again for no
+benefit. `AFTER` is already 90 minutes, so only a delay exceeding that is
+outside the window's own reach. With the threshold it is +1.4/day, and the
+follow-ups land exactly where they should: 05580 on 07-27 and 07-29, 05576 on
+07-31, 12615, 15274.
+
+Also capped by `MAX_SHIFT` (12 h, so a garbled payload cannot send the poller
+chasing a train days out) and `MAX_POLLS_PER_DAY` (3, so a train that keeps
+slipping cannot eat the budget alone).
 
 ### Monthly full refresh
 `run_days` is refreshed on every poll, so timetable changes propagate — but

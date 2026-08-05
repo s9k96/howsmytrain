@@ -96,6 +96,17 @@ create index if not exists idx_poller_runs_ran_at on poller_runs (ran_at desc);
 -- after arrival yields the next run sitting at its origin with delay=0. That
 -- is not a journey we observed -- counting it would silently inflate on-time
 -- percentage with runs that never happened.
+--
+-- 'cancelled' is excluded for the same reason and was found the same way.
+-- RailRadar reports a cancelled service with delay=0, which read as a
+-- perfectly punctual journey: 12553 has come back cancelled on all 13 polls
+-- it has ever received, and each one was being counted as an on-time run for
+-- a train that never moved. A cancellation is a real fact but it is not a
+-- punctuality observation, and averaging it in only ever flatters the fleet.
+--
+-- `is distinct from` rather than `not in`: null statuses must survive, and
+-- `status not in (...)` evaluates to null -- i.e. drops the row -- when
+-- status is null.
 create or replace view daily_delays
 with (security_invoker = on) as
 select distinct on (p.train_number, p.journey_date)
@@ -110,6 +121,7 @@ select distinct on (p.train_number, p.journey_date)
 from polls p
 join trains t using (train_number)
 where p.status is distinct from 'not-started'
+  and p.status is distinct from 'cancelled'
 order by p.train_number, p.journey_date, (p.delay_minutes is null), p.polled_at desc;
 
 -- Weekly rollup. Mirrors app/aggregate.py:weekly_stats.

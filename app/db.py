@@ -147,6 +147,21 @@ def list_polls(
         return conn.execute(query, params).fetchall()
 
 
+# Statuses that are not a punctuality observation.
+#
+#   not-started -- RailRadar returns the train's currently active run, so a
+#                  poll placed too early or too late gets the NEXT run sitting
+#                  at its origin with delay=0.
+#   cancelled   -- reported with delay=0 as well. 12553 came back cancelled on
+#                  every poll it ever received, each one counting as an on-time
+#                  journey for a train that never ran.
+#
+# Both read as flawless punctuality, so both only ever flatter the fleet.
+# `status IS NULL OR ...` keeps rows we couldn't classify: unknown is not the
+# same as excluded, and in SQL `NOT IN` on a null drops the row silently.
+_REAL_JOURNEY = "(p.status IS NULL OR p.status NOT IN ('not-started', 'cancelled'))"
+
+
 def list_journey_final_delays(
     train_number: Optional[str] = None,
     since_date: Optional[str] = None,
@@ -173,8 +188,8 @@ def list_journey_final_delays(
                        MAX(CASE WHEN delay_minutes IS NOT NULL THEN polled_at END),
                        MAX(polled_at)
                    ) AS max_polled_at
-            FROM polls
-            WHERE 1=1
+            FROM polls p
+            WHERE {real_journey}
             {train_filter}
             {date_filter}
             GROUP BY train_number, journey_date
@@ -182,17 +197,19 @@ def list_journey_final_delays(
         ON p.train_number = latest.train_number
         AND p.journey_date = latest.journey_date
         AND p.polled_at = latest.max_polled_at
+        WHERE {real_journey}
         ORDER BY p.journey_date DESC, p.train_number
     """
     train_filter = ""
     date_filter = ""
     params: list = []
     if train_number:
-        train_filter = "AND train_number = ?"
+        train_filter = "AND p.train_number = ?"
         params.append(train_number)
     if since_date:
-        date_filter = "AND journey_date >= ?"
+        date_filter = "AND p.journey_date >= ?"
         params.append(since_date)
-    query = query.format(train_filter=train_filter, date_filter=date_filter)
+    query = query.format(train_filter=train_filter, date_filter=date_filter,
+                         real_journey=_REAL_JOURNEY)
     with get_connection() as conn:
         return conn.execute(query, params).fetchall()

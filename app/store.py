@@ -167,9 +167,19 @@ def list_trains() -> list[dict]:
     return resp.json()
 
 
-def last_polled(since_date: str) -> dict[str, datetime]:
+def last_readings(since_date: str) -> dict[str, dict]:
     """
-    train_number -> the most recent polled_at on or after since_date.
+    train_number -> what we last saw, and when we have looked.
+
+        {"at": datetime,            # most recent polled_at
+         "delay_minutes": int|None, # from that same poll
+         "status": str|None,        # from that same poll
+         "times": [datetime, ...]}  # every poll since since_date
+
+    `at` is what dedup keys on. `delay_minutes` and `status` are what let the
+    window follow a late train to where it will actually arrive rather than
+    closing 90 minutes after a scheduled time it was never going to make.
+    `times` is only there so a train that keeps slipping can be capped.
 
     Dedup is keyed on *when a train was last read*, never on which journey the
     reading turned out to belong to.
@@ -188,22 +198,28 @@ def last_polled(since_date: str) -> dict[str, datetime]:
     both sides of it are poll times we control. Twelve of the fleet's services
     run longer than 24 h, so this is the common case, not an edge one.
     """
+    def _add(out: dict, number: str, at: datetime, delay, status) -> None:
+        e = out.setdefault(number, {"at": at, "delay_minutes": delay,
+                                    "status": status, "times": []})
+        e["times"].append(at)
+        if at >= e["at"]:
+            e.update(at=at, delay_minutes=delay, status=status)
+
+    out: dict[str, dict] = {}
     if not enabled():
-        rows = db.list_polls(since_date=since_date, limit=5000)
-        out: dict[str, datetime] = {}
-        for r in rows:
-            at = datetime.fromisoformat(r["polled_at"])
-            if at > out.get(r["train_number"], at.min.replace(tzinfo=at.tzinfo)):
-                out[r["train_number"]] = at
+        for r in db.list_polls(since_date=since_date, limit=5000):
+            _add(out, r["train_number"], datetime.fromisoformat(r["polled_at"]),
+                 r["delay_minutes"], r["status"])
         return out
+
     resp = httpx.get(
-        _url(f"polls?select=train_number,polled_at&polled_at=gte.{since_date}"
-             "&order=polled_at.desc&limit=5000"),
+        _url(f"polls?select=train_number,polled_at,delay_minutes,status"
+             f"&polled_at=gte.{since_date}&order=polled_at.desc&limit=5000"),
         headers=_headers(),
         timeout=TIMEOUT,
     )
-    _check(resp, "last_polled")
-    out = {}
+    _check(resp, "last_readings")
     for r in resp.json():   # newest first, so the first hit per train wins
-        out.setdefault(r["train_number"], datetime.fromisoformat(r["polled_at"]))
+        _add(out, r["train_number"], datetime.fromisoformat(r["polled_at"]),
+             r["delay_minutes"], r["status"])
     return out

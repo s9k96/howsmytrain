@@ -3,7 +3,7 @@ import time
 from app import aggregate, db
 
 
-def _insert(train_number, journey_date, delay_minutes, status="running", station="NDLS"):
+def _insert(train_number, journey_date, delay_minutes, status="running", station="NDLS"):  # noqa: E302
     db.insert_poll(
         train_number=train_number,
         status=status,
@@ -58,6 +58,44 @@ def test_daily_stats_keeps_a_journey_whose_polls_all_lack_a_delay(temp_db):
     rows = aggregate.daily_stats(train_number="12553", days=30)
     assert len(rows) == 1
     assert rows[0]["delay_minutes"] is None
+    assert rows[0]["on_time"] is False
+
+
+def test_cancelled_runs_are_not_punctuality_observations(temp_db):
+    # RailRadar reports a cancelled service with delay=0, which reads as a
+    # flawless journey. 12553 came back cancelled on all 13 polls it ever
+    # received and was counted as on time every time -- for a train that never
+    # ran. Excluding it can only ever lower the on-time figure, which is the
+    # honest direction.
+    db.upsert_train("12553", "Vaishali Express")
+    _insert("12553", "2026-07-29", delay_minutes=0, status="cancelled")
+    _insert("12553", "2026-07-30", delay_minutes=0, status="cancelled")
+
+    assert aggregate.daily_stats(train_number="12553", days=30) == []
+
+
+def test_not_started_runs_are_excluded_too(temp_db):
+    # The same trap from the other end: a poll placed outside the window gets
+    # the NEXT run parked at its origin, also with delay=0.
+    db.upsert_train("12301", "Test Express")
+    _insert("12301", "2026-07-29", delay_minutes=0, status="not-started")
+    _insert("12301", "2026-07-29", delay_minutes=25, status="running")
+
+    rows = aggregate.daily_stats(train_number="12301", days=30)
+    assert len(rows) == 1
+    assert rows[0]["delay_minutes"] == 25   # the real reading, not the parked 0
+
+
+def test_a_cancelled_poll_does_not_hide_a_real_one(temp_db):
+    # Cancellation is filtered before "latest wins" is applied, so a later
+    # cancelled row must not displace an earlier genuine reading.
+    db.upsert_train("12951", "Rajdhani")
+    _insert("12951", "2026-07-29", delay_minutes=18, status="running")
+    _insert("12951", "2026-07-29", delay_minutes=0, status="cancelled")
+
+    rows = aggregate.daily_stats(train_number="12951", days=30)
+    assert len(rows) == 1
+    assert rows[0]["delay_minutes"] == 18
     assert rows[0]["on_time"] is False
 
 

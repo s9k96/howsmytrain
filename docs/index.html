@@ -61,6 +61,11 @@
 // in common.js.
 
 const WINDOW_DAYS = 30;          // widest range the toggle offers
+const SPARK_RUNS = 7;            // bars in the row chart -- runs, not days
+// Fetch window. Wider than WINDOW_DAYS on purpose: the row chart counts runs,
+// and a Saturday-only service needs about ten weeks on file before it has
+// seven of them. The aggregates still slice their own 7/30 days out of this.
+const HISTORY_DAYS = 70;
 const REFRESH_MS = 5 * 60 * 1000;
 
 let summary = [];                // train_summary rows
@@ -248,15 +253,40 @@ function renderHero() {
  * as a floor tick: dropping it would slide the other six along and quietly
  * describe a different week.
  */
+/**
+ * The row chart: this train's last few journeys, newest at the right.
+ *
+ * Counts RUNS, not calendar days. Keyed on days it was seven mostly-empty
+ * slots for anything that doesn't run daily -- 13066 runs Saturdays, so a
+ * seven-day window could never hold more than one bar, and the column said
+ * nothing at all for a third of the fleet.
+ *
+ * Short histories pad on the left so the newest journey is always in the same
+ * place across rows; those leading gaps mean "no more runs on file", which
+ * looks identical to the old "didn't run that day" and is why the label had
+ * to change with the data.
+ */
 function sparkbars(trainNo) {
   const hist = byTrain[trainNo] || {};
-  const week = lastDays(7).map(d => hist[d]);
-  const max = Math.max(...week.filter(v => v != null), 1);
-  return `<span class="spark" aria-hidden="true">${week.map(v =>
-    v === null || v === undefined
-      ? `<i class="gap"></i>`
-      : `<i style="height:${Math.max(6, Math.round(100 * v / max))}%;--bar:${scaleOf(v)}"></i>`
-  ).join("")}</span>`;
+  const runs = Object.keys(hist)
+    .filter(d => hist[d] !== null && hist[d] !== undefined)
+    .sort()                                  // ISO dates: lexical == chronological
+    .slice(-SPARK_RUNS)
+    .map(d => hist[d]);
+
+  const max = Math.max(...runs, 1);
+  const pad = SPARK_RUNS - runs.length;
+  const label = runs.length
+    ? `Last ${runs.length} recorded journey${runs.length === 1 ? "" : "s"}, oldest first: `
+      + runs.map(v => fmtDelay(v)).join(", ")
+    : "No journeys recorded yet";
+
+  return `<span class="spark" role="img" aria-label="${esc(label)}" title="${esc(label)}">`
+    + '<i class="gap"></i>'.repeat(pad)
+    + runs.map(v =>
+        `<i style="height:${Math.max(6, Math.round(100 * v / max))}%;--bar:${scaleOf(v)}"></i>`
+      ).join("")
+    + `</span>`;
 }
 
 const STATE_LABEL = { running: "EN ROUTE", done: "COMPLETED", before: "NOT STARTED" };
@@ -349,7 +379,7 @@ function renderRows(rows) {
       <span style="text-align:right">${multi ? "AVG ARR" : "ACTUAL"}</span>
       <span style="text-align:right">${multi ? "AVG DELAY" : "DELAY"}</span>
       <span style="text-align:right" title="Delay as a share of the scheduled journey time">DELAY %</span>
-      <span style="text-align:right">LAST 7 DAYS</span>
+      <span style="text-align:right" title="This train's last 7 recorded journeys, newest at the right — not the last 7 days">LAST 7 RUNS</span>
     </div>
     ${rows.map((r) => {
       const { t, delay, observed, state } = r;
@@ -471,7 +501,7 @@ async function load() {
   }
 
   const since = new Date();
-  since.setDate(since.getDate() - WINDOW_DAYS);
+  since.setDate(since.getDate() - HISTORY_DAYS);
   try {
     const [rows, hist, runs] = await Promise.all([
       sb("train_summary", "select=*&order=train_number"),

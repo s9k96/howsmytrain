@@ -34,9 +34,16 @@ from app.poller import poll_all
 BEFORE = timedelta(minutes=10)
 AFTER = timedelta(minutes=90)
 
-# Shortest window we'll accept after clipping at midnight -- comfortably more
-# than the ~15 min trigger interval, so a late-night train still gets a tick.
-MIN_WINDOW = timedelta(minutes=45)
+# How far a known delay may push the window. 12 h covers every floor reading
+# on record (the worst was 05580 at 630 min) while keeping the search to
+# today-or-yesterday in _window, and stops a nonsense delay from a bad payload
+# sending the poller chasing a train days out.
+MAX_SHIFT = 12 * 60
+
+# Hard ceiling per train per day, whatever the delay does. Normal is one; this
+# leaves room for two follow-ups on a badly delayed run and no more, so a
+# train that slips repeatedly cannot eat the 50/day budget on its own.
+MAX_POLLS_PER_DAY = 3
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,55 +72,100 @@ def _runs_today(train: dict, now: datetime) -> bool:
     return DAYS[departure_day] in run_days
 
 
-def _window(arrival: str, now: datetime) -> tuple[datetime, datetime]:
+def _window(arrival: str, now: datetime, shift: int = 0):
     """
-    When a poll of this train would give a near-final delay, on now's date.
+    The polling window containing `now`, or None if there isn't one.
 
-    The window never crosses midnight. It can't: `journey_date` is the poll
-    date, so a poll at 00:10 for a 23:58 arrival files under the next day --
-    where `already_polled` can't see it, so the same journey gets polled
-    again on the next tick, and the next. Clipping at 23:59 and sliding the
-    start back keeps one journey in one bucket.
+    `shift` moves the whole window later by that many minutes: the delay the
+    train was last seen carrying. Without it the window is anchored to a
+    scheduled time a late train was never going to make, so it closes 90
+    minutes after a time the train is still hours away from -- and the only
+    reading we ever take is a floor. 22 of the first 239 journeys were
+    recorded that way, including 05580 at "+630" while it still had 630
+    minutes left to run. Shifting means the follow-up lands near the arrival
+    that is actually going to happen.
 
-    ponytail: costs accuracy on trains arriving near midnight, which get read
-    up to ~45 min early. Take `journey_date` from RailRadar's `startDate`
-    (see TODO.md) and the window can wrap properly instead.
+    No new dedup is needed for that follow-up. The rule is "have we read this
+    train since its window opened?", and the earlier poll necessarily happened
+    before the shifted window opens, so the train simply becomes due again.
+
+    The window may now cross midnight, which it used to refuse to do. That
+    clip existed because `journey_date` was the poll date, so a poll at 00:10
+    filed under a day where dedup couldn't see it. `journey_date` now comes
+    from RailRadar's `startDate` and dedup keys on poll time, so neither side
+    cares what date a window ends on. Yesterday's arrival is checked as well
+    as today's, which is what a wrapped or shifted window needs.
     """
     hh, mm, *_ = str(arrival).split(":")
-    target = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
-    end = min(target + AFTER, target.replace(hour=23, minute=59))
-    return min(target - BEFORE, end - MIN_WINDOW), end
+    for days in (0, -1):
+        target = (now + timedelta(days=days)).replace(
+            hour=int(hh), minute=int(mm), second=0, microsecond=0
+        ) + timedelta(minutes=shift)
+        start, end = target - BEFORE, target + AFTER
+        if start <= now <= end:
+            return start, end
+    return None
 
 
-def _due_now(trains: list[dict], now: datetime, last_polled: dict[str, datetime]) -> list[str]:
+def _due_now(trains: list[dict], now: datetime, last: dict[str, dict]) -> list[str]:
     """
-    Train numbers whose scheduled arrival falls in the window around now and
-    which we have not already read during that window.
+    Train numbers whose arrival window contains now and which we have not
+    already read during that window.
 
-    Dedup is by poll time, not by journey identity -- see store.last_polled for
-    why predicting the journey could not be made to work. One reading per
+    Dedup is by poll time, not by journey identity -- see store.last_readings
+    for why predicting the journey could not be made to work. One reading per
     window is all the daily stat needs, and a failed poll writes no row, so it
     is retried on the next tick.
+
+    A train last seen *running* and late has its window shifted to where it is
+    now expected, which is what turns a floor reading into a real one. That
+    costs a second request for that train, so it is capped: only a `running`
+    reading shifts anything (a `completed` one is final and there is nothing
+    left to chase), the shift is bounded by MAX_SHIFT, and no train is polled
+    more than MAX_POLLS_PER_DAY times whatever its delay does.
     """
     due = []
     for t in trains:
         number = t["train_number"]
         if not _runs_today(t, now):
             continue  # doesn't run today -- polling returns the next run, not this one
-        last = last_polled.get(number)
+        seen = last.get(number)
+        at = seen["at"] if seen else None
         arrival = t.get("scheduled_arrival")
         if not arrival:
             # Unknown schedule -> one poll to learn it. Compared as an elapsed
             # span rather than a calendar day because the stored timestamps are
             # UTC while `now` is IST, and a train we know nothing about needs
             # one reading a day, not one per tick.
-            if last is None or (now - last) > timedelta(hours=12):
+            if at is None or (now - at) > timedelta(hours=12):
                 due.append(number)
             continue
-        start, end = _window(arrival, now)
-        if not start <= now <= end:
+
+        # A budget guard before anything else: a train that keeps slipping
+        # would otherwise shift its own window forever, one request each time.
+        if seen and sum(1 for x in seen["times"] if x.date() == now.date()) >= MAX_POLLS_PER_DAY:
             continue
-        if last is not None and last >= start:
+
+        # Only a delay the window cannot already reach is worth a second
+        # request. AFTER is 90 minutes, so a train an hour down is covered by
+        # the original window and shifting for it buys nothing while costing a
+        # call: shifting on *any* delay measured out at 42 requests/day against
+        # a 50/day cap, with a peak of 49. Thresholding here puts it back to 32.
+        shift = 0
+        delay = seen["delay_minutes"] if seen else None
+        if seen and seen["status"] == "running" and delay and delay > AFTER.total_seconds() / 60:
+            shift = min(delay, MAX_SHIFT)
+
+        window = _window(arrival, now, shift)
+        # A shifted window can leave the unshifted one still open (the train is
+        # late but not yet past its scheduled slot). Either is a fair moment to
+        # read it, so fall back rather than going quiet in between.
+        if window is None and shift:
+            window = _window(arrival, now)
+        if window is None:
+            continue
+        start, _end = window
+        if at is not None and at >= start:
             continue
         due.append(number)
     return due
@@ -138,7 +190,7 @@ def main() -> int:
         # A window is at most 100 min wide, so two days of poll history is
         # ample -- it only has to cover the current window plus the 12 h guard
         # on trains whose schedule we haven't learned yet.
-        last = store.last_polled((now - timedelta(days=2)).strftime("%Y-%m-%d"))
+        last = store.last_readings((now - timedelta(days=2)).strftime("%Y-%m-%d"))
         # Order by configured list so behaviour is deterministic.
         due = _due_now(
             [known.get(n, {"train_number": n, "scheduled_arrival": None}) for n in configured],
