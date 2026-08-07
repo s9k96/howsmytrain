@@ -198,5 +198,38 @@ assert.strictEqual(lostTime.length, 6);
 // rather than inventing a zero.
 assert.strictEqual(median([0, 0, 0].filter(d => d > 0)), null);
 
-console.log(`${cases.length + readCases.length} journeyState cases `
-  + `(${readCases.length} with a live reading) + 66 other cases pass`);
+// ---- sb() paging ----------------------------------------------------------
+// PostgREST silently truncates at 1000 rows, so a page that asked for more got
+// a short answer and no error. Unordered, the rows it dropped were the newest:
+// the health page read 1000 of 1040 heartbeats and reported the scheduler 15 h
+// dead while it was running normally.
+(async () => {
+  const seen = [];
+  const page = (n) => Array.from({ length: n }, (_, i) => ({ i }));
+
+  ctx.fetch = async (url) => {
+    seen.push(url);
+    const full = !/offset=/.test(url);
+    return { ok: true, json: async () => page(full ? 1000 : 40) };
+  };
+  const all = await ctx.sb("poller_runs", "select=ran_at&order=ran_at.desc");
+  assert.strictEqual(all.length, 1040, "must page past the cap, not stop at it");
+  assert.strictEqual(seen.length, 2);
+  assert.ok(/offset=1000/.test(seen[1]), "second page must start where the first ended");
+
+  // A result that fits costs exactly one request.
+  seen.length = 0;
+  ctx.fetch = async (url) => {
+    seen.push(url);
+    return { ok: true, json: async () => page(12) };
+  };
+  assert.strictEqual((await ctx.sb("trains", "select=*")).length, 12);
+  assert.strictEqual(seen.length, 1);
+
+  // An error still throws rather than returning a partial list.
+  ctx.fetch = async () => ({ ok: false, status: 500, text: async () => "boom" });
+  await assert.rejects(() => ctx.sb("polls", "select=*"), /HTTP 500/);
+
+  console.log(`${cases.length + readCases.length} journeyState cases `
+    + `(${readCases.length} with a live reading) + 71 other cases pass`);
+})();

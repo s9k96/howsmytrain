@@ -23,6 +23,26 @@
   .kv dd { margin: 0; font: 400 13px/1.4 var(--mono); }
   /* Chart cards size to plot + axis band so labels never force a nested scroll. */
   .chart-box { position: relative; height: 300px; }
+  /* Two full-width charts cost 600px of scroll to show 600px of mostly empty
+     plot. Side by side under one hairline, split by a vertical one. minmax(0,·)
+     is load-bearing: a grid track that can't shrink below its content leaves a
+     responsive canvas able to grow on resize but never shrink back. */
+  .chart-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chart-pair > .card + .card { border-left: 1px solid var(--hairline); }
+  /* Narrower than this and five bin labels won't fit on the distribution axis. */
+  @media (max-width: 900px) {
+    .chart-pair { grid-template-columns: minmax(0, 1fr); }
+    .chart-pair > .card + .card { border-left: none; }
+  }
+  /* The bin table is the chart's accessible twin, so it stays in the DOM and in
+     the a11y tree -- but folded away, or its 5 rows put the hole back beside
+     the trend chart. Opened by renderDistribution whenever the chart is too
+     sparse to draw and the table is the only form of the data. */
+  #dist-details > summary {
+    font: 400 10.5px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-3); cursor: pointer; padding: 12px 0 4px;
+  }
+  #dist-details > summary:hover { color: var(--text-primary); }
 </style>
 </head>
 <body>
@@ -45,17 +65,23 @@
       <div id="details"></div>
     </div>
 
-    <div class="card">
-      <div class="card-head"><h2>Final delay by day</h2></div>
-      <div class="chart-box"><canvas id="trend-chart"></canvas></div>
-      <div class="empty-state hidden" id="trend-empty"></div>
-    </div>
+    <div class="chart-pair">
+      <div class="card">
+        <div class="card-head"><h2>Final delay by day</h2></div>
+        <div class="chart-box"><canvas id="trend-chart"></canvas></div>
+        <div class="empty-state hidden" id="trend-empty"></div>
+      </div>
 
-    <div class="card">
-      <div class="card-head"><h2>Delay distribution</h2></div>
-      <div class="chart-box"><canvas id="dist-chart"></canvas></div>
-      <div class="empty-state hidden" id="dist-empty"></div>
-      <div id="dist-table"></div>
+      <div class="card">
+        <div class="card-head"><h2>Delay distribution</h2></div>
+        <div class="chart-box"><canvas id="dist-chart"></canvas></div>
+        <div class="empty-state hidden" id="dist-empty"></div>
+        <details id="dist-details">
+          <!-- Neutral wording: this summary is read in both states. -->
+          <summary>Counts by bin</summary>
+          <div id="dist-table"></div>
+        </details>
+      </div>
     </div>
 
     <div class="card">
@@ -231,7 +257,9 @@ function renderDistribution(delays) {
   const counts = BINS.map(b => delays.filter(b.test).length);
 
   // Table twin renders regardless -- it is the accessible equivalent and the
-  // only readable form while n is small.
+  // only readable form while n is small, which is also when it is shown
+  // unfolded rather than behind its summary.
+  document.getElementById("dist-details").open = delays.length < MIN_FOR_DISTRIBUTION;
   document.getElementById("dist-table").innerHTML = `
     <table class="tabular">
       <thead><tr><th>Delay range</th><th>Journeys</th><th>Share</th></tr></thead>

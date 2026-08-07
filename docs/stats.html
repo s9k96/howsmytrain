@@ -444,10 +444,11 @@ async function main() {
   try {
     const [trains, journeys, runs] = await Promise.all([
       sb("train_summary", "select=*&order=train_number"),
-      // All of history, deliberately: this page is the long view, and the
-      // whole fleet is a few hundred rows. Revisit the limit at ~15k, roughly
-      // a year of daily polling across 39 services.
-      sb("daily_delays", "select=train_number,journey_date,delay_minutes&limit=20000"),
+      // All of history, deliberately: this page is the long view. That runs
+      // past PostgREST's 1000-row cap in about a month, so it is ordered and
+      // let sb() page through -- unordered, the rows dropped at the cap would
+      // have been the newest journeys, silently.
+      sb("daily_delays", "select=train_number,journey_date,delay_minutes&order=journey_date.desc"),
       sb("poller_runs", "select=ran_at&order=ran_at.desc&limit=1").catch(() => []),
     ]);
 

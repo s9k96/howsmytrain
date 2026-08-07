@@ -299,10 +299,14 @@ async function main() {
     since.setDate(since.getDate() - DAYS_BACK);
     const [trains, polls, runs] = await Promise.all([
       sb("train_summary", "select=*&order=train_number"),
-      sb("polls", `select=train_number,journey_date,polled_at&journey_date=gte.${isoDate(since)}&limit=5000`),
+      sb("polls", `select=train_number,journey_date,polled_at&journey_date=gte.${isoDate(since)}&order=polled_at.desc`),
       // poller_runs may not exist yet on an un-migrated project -- the page
       // still works without it, just without the heartbeat.
-      sb("poller_runs", `select=ran_at,due_count,ok_count,failed_count&ran_at=gte.${isoDate(since)}&limit=5000`)
+      //
+      // Newest first and bounded: only the latest heartbeat and today's count
+      // are read, and the poller writes ~96 rows a day. Asking for all 14 days
+      // is what ran into PostgREST's row cap and dropped the newest runs.
+      sb("poller_runs", `select=ran_at,due_count,ok_count,failed_count&ran_at=gte.${isoDate(since)}&order=ran_at.desc&limit=500`)
         .catch(() => []),
     ]);
     render(trains, polls, runs, new Date());

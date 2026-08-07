@@ -16,12 +16,35 @@ function configured() {
   return !SUPABASE_URL.includes("YOUR-PROJECT") && !SUPABASE_ANON_KEY.includes("YOUR_ANON");
 }
 
+// PostgREST caps every response at this many rows (Supabase's `db-max-rows`),
+// whatever `limit=` asks for, and says so only in the Content-Range header. A
+// query that quietly came back short is what made the health page report the
+// scheduler 15 h dead while it was running fine: 1040 heartbeats matched, 1000
+// came back, and with no ORDER BY the rows Postgres dropped were the newest.
+const PAGE_ROWS = 1000;
+
+/**
+ * One PostgREST read, paged past the cap so callers get the whole result.
+ *
+ * Paging by offset is only stable under an explicit order, so a query that
+ * fills a page without one is a bug -- warned about here rather than silently
+ * returning a shuffled subset.
+ */
 async function sb(view, query = "select=*") {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${view}?${query}`, {
-    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-  });
-  if (!res.ok) throw new Error(`${view} -> HTTP ${res.status}: ${await res.text()}`);
-  return res.json();
+  const out = [];
+  for (let offset = 0; ; offset += PAGE_ROWS) {
+    const url = `${SUPABASE_URL}/rest/v1/${view}?${query}` + (offset ? `&offset=${offset}` : "");
+    const res = await fetch(url, {
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+    });
+    if (!res.ok) throw new Error(`${view} -> HTTP ${res.status}: ${await res.text()}`);
+    const rows = await res.json();
+    out.push(...rows);
+    if (rows.length < PAGE_ROWS) return out;
+    if (!/[?&]order=/.test(query)) {
+      console.warn(`sb(${view}): hit the ${PAGE_ROWS}-row cap with no order= — paging may repeat or skip rows`);
+    }
+  }
 }
 
 // API-supplied strings end up in innerHTML.
