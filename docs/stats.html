@@ -46,7 +46,25 @@
      borrowing it renders every cell in this column as a 42x3px grey bar. */
   td.cell-dur { color: var(--text-2); }
 
-  .stats-note { margin-top: 18px; }
+  /* Both tables' notes sit together at the foot of the page instead of
+     interrupting the run of tables. Two columns so the block fills the page
+     width rather than hugging the left edge, without any line running to the
+     140 characters a single full-width column would give at this page size --
+     which is why the shared 68ch cap is lifted only inside this grid. */
+  .notes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 22px 44px;
+  }
+  .notes-grid h3 {
+    font: 400 10.5px/1.3 var(--mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-label);
+    margin: 0 0 10px;
+  }
+  .notes-grid .waiting-note { max-width: none; }
+  .notes-grid .waiting-note:last-child { margin-bottom: 0; }
 
   /* The measurement caveat earns a colour once most of a class was read
      mid-journey. styles.css scopes .warn to pills and stat values, so on a
@@ -123,18 +141,6 @@
         <h2>By class</h2>
       </div>
       <div class="table-scroll" id="classes"></div>
-      <p class="waiting-note stats-note">
-        RailRadar's own classification, not ours, and always the whole fleet —
-        the filters below don't reach it. Figures are pooled across every
-        journey in the class rather than averaged over its trains, so a service
-        seen once doesn't count as loudly as one seen weekly.
-        <b>AT ARRIVAL</b> is the share of those journeys read within
-        <b>6 h</b> of the arrival they describe: for services scheduled longer
-        than a day the live endpoint usually returns the run that departed most
-        recently rather than the one arriving, so their delays describe a train
-        still mid-journey. A low figure means read that row as
-        <i>how late partway</i>, not <i>how late it arrived</i>.
-      </p>
     </section>
 
     <section class="band">
@@ -154,16 +160,48 @@
       </div>
       <div class="table-scroll" id="table"></div>
       <div id="hidden" role="status" aria-live="polite"></div>
-      <p class="waiting-note stats-note">
-        Every figure covers all journeys on record, not a fixed window, so a
-        service tracked for three days and one tracked for three weeks sit in
-        the same table — read <b>RUNS</b> before comparing them. A journey
-        counts only once a poll caught it actually running and returned a
-        delay; an asterisk means further journeys were seen but carried no
-        usable reading. <b>DELAY %</b> is the average delay as a share of the
-        scheduled journey time; it is the only column that compares a Shatabdi
-        to a thirty-hour long-haul fairly.
-      </p>
+    </section>
+
+    <section class="band">
+      <div class="band-head">
+        <h2>Reading these tables</h2>
+      </div>
+      <div class="notes-grid">
+        <div>
+          <h3>By class</h3>
+          <p class="waiting-note">
+            RailRadar's own classification, not ours, and always the whole
+            fleet — the filters on <b>All trains</b> don't reach it. Figures are
+            pooled across every journey in the class rather than averaged over
+            its trains, so a service seen once doesn't count as loudly as one
+            seen weekly.
+          </p>
+          <p class="waiting-note">
+            <b>AT ARRIVAL</b> is the share of those journeys read within
+            <b>6 h</b> of the arrival they describe. For services scheduled
+            longer than a day the live endpoint usually returns the run that
+            departed most recently rather than the one arriving, so their
+            delays describe a train still mid-journey. A low figure means read
+            that row as <i>how late partway</i>, not <i>how late it arrived</i>.
+          </p>
+        </div>
+        <div>
+          <h3>All trains</h3>
+          <p class="waiting-note">
+            Every figure covers all journeys on record, not a fixed window, so
+            a service tracked for three days and one tracked for three weeks
+            sit in the same table — read <b>RUNS</b> before comparing them. A
+            journey counts only once a poll caught it actually running and
+            returned a delay; an asterisk means further journeys were seen but
+            carried no usable reading.
+          </p>
+          <p class="waiting-note">
+            <b>DELAY %</b> is the average delay as a share of the scheduled
+            journey time; it is the only column that compares a Shatabdi to a
+            thirty-hour long-haul fairly.
+          </p>
+        </div>
+      </div>
     </section>
   </main>
 
