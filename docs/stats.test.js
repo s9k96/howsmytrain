@@ -35,7 +35,7 @@ vm.runInContext(inline[1], ctx);
 
 // Function declarations land on the vm's global object; `const`/`let` do not,
 // so COLS has to be read by evaluating its name inside the context.
-const { build, sortRows, median, binOf } = ctx;
+const { build, sortRows, median, binOf, byClass, nearArrival } = ctx;
 const COLS = vm.runInContext("COLS", ctx);
 const SHARE_BINS = vm.runInContext("SHARE_BINS", ctx);
 
@@ -173,5 +173,76 @@ assert.strictEqual(binned.length, 2);
 assert.strictEqual(scope.length - binned.length, 1, "the un-binned service must be reported, not dropped");
 assert.deepStrictEqual(binned.map(r => binOf(r.share)).sort(), [1, 4]);
 
-console.log(`stats: 46 build/median/sort/threshold/band assertions pass `
-  + `across ${COLS.length} columns and ${SHARE_BINS.length} bands`);
+// ---- byClass -------------------------------------------------------------
+// Pooling, not averaging averages. A class holding a train seen nine times and
+// a train seen once is not the mean of two numbers -- done that way, the train
+// seen once carries the same weight as the one seen weekly.
+const raj = { train_number: "12301", name: "Rajdhani", train_type: "Rajdhani Express",
+              scheduled_departure: "17:00:00", scheduled_arrival: "10:00:00", arrival_day_offset: 1 };
+const raj2 = { ...raj, train_number: "12313", name: "Rajdhani 2" };
+const sht = { train_number: "12005", name: "Shatabdi", train_type: "Shatabdi Express",
+              scheduled_departure: "17:15:00", scheduled_arrival: "21:15:00", arrival_day_offset: 0 };
+
+const fleet = build([raj, raj2, sht], [
+  { train_number: "12301", journey_date: "2026-08-01", delay_minutes: 0 },
+  { train_number: "12301", journey_date: "2026-08-02", delay_minutes: 60 },
+  { train_number: "12301", journey_date: "2026-08-03", delay_minutes: 120 },
+  { train_number: "12313", journey_date: "2026-08-01", delay_minutes: 12 },
+  { train_number: "12005", journey_date: "2026-08-01", delay_minutes: 4 },
+  { train_number: "12005", journey_date: "2026-08-02", delay_minutes: null },  // seen, unreadable
+]);
+const classes = byClass(fleet);
+const byKey = Object.fromEntries(classes.map(g => [g.key, g]));
+
+assert.strictEqual(classes.length, 2);
+assert.strictEqual(byKey["Rajdhani Express"].trains, 2);
+assert.strictEqual(byKey["Rajdhani Express"].runs, 4, "runs pool across the class's trains");
+assert.strictEqual(byKey["Rajdhani Express"].med, 36);   // median of 0,12,60,120
+assert.strictEqual(byKey["Rajdhani Express"].avg, 48);
+assert.strictEqual(byKey["Rajdhani Express"].worst, 120);
+assert.strictEqual(byKey["Rajdhani Express"].onTime, 25);  // only the 0; 12 is over the line
+// Averaging the two trains' medians would give (60 + 12) / 2 = 36 by luck, so
+// pin the mean instead: per-train it would be (60 + 12) / 2 = 36, pooled it is 48.
+assert.notStrictEqual(byKey["Rajdhani Express"].avg, 36);
+
+assert.strictEqual(byKey["Shatabdi Express"].runs, 1, "a journey with no delay is not a run");
+assert.strictEqual(byKey["Shatabdi Express"].med, 4);
+
+// Worst class first: the table's job is to say which class to worry about.
+// Spread into this realm, as above -- the vm's Array.prototype fails deepStrictEqual.
+assert.deepStrictEqual([...classes.map(g => g.key)], ["Rajdhani Express", "Shatabdi Express"]);
+
+// A train never polled since the class column shipped has no class. That is a
+// gap, not a category, so it must not be silently folded into a real one.
+const unknown = byClass(build([{ train_number: "99999", name: "New" }],
+                              [{ train_number: "99999", journey_date: "2026-08-01", delay_minutes: 5 }]));
+assert.strictEqual(unknown[0].key, "Unclassified");
+
+// ---- nearArrival ---------------------------------------------------------
+// The honesty column. Arrival is journey_date + arrival_day_offset at the
+// scheduled time, in IST -- 12301 departing 01 Aug reaches Delhi 02 Aug 10:00.
+assert.strictEqual(nearArrival(raj, { journey_date: "2026-08-01", polled_at: "2026-08-02T09:50:00+05:30" }), true);
+assert.strictEqual(nearArrival(raj, { journey_date: "2026-08-01", polled_at: "2026-08-02T11:30:00+05:30" }), true,
+  "after the scheduled arrival still counts -- that is a late train, read late");
+// 04:00 is exactly six hours out, so 04:05 is the last minute that counts.
+assert.strictEqual(nearArrival(raj, { journey_date: "2026-08-01", polled_at: "2026-08-02T04:05:00+05:30" }), true);
+assert.strictEqual(nearArrival(raj, { journey_date: "2026-08-01", polled_at: "2026-08-02T03:55:00+05:30" }), false);
+assert.strictEqual(nearArrival(raj, { journey_date: "2026-08-01", polled_at: "2026-08-02T03:00:00+05:30" }), false,
+  "seven hours short of arrival is a mid-journey reading");
+assert.strictEqual(nearArrival(raj, { journey_date: "2026-08-01", polled_at: "2026-08-01T10:00:00+05:30" }), false,
+  "the day-offset must be applied, or a 24 h train looks measured at arrival");
+assert.strictEqual(nearArrival({ ...raj, scheduled_arrival: null },
+                               { journey_date: "2026-08-01", polled_at: "2026-08-02T09:50:00+05:30" }), false);
+assert.strictEqual(nearArrival(raj, { journey_date: "2026-08-01", polled_at: null }), false);
+
+// And it has to reach the class table, counted only over readable journeys so
+// it can be read as a share of RUNS.
+const measured = byClass(build([raj], [
+  { train_number: "12301", journey_date: "2026-08-01", delay_minutes: 30, polled_at: "2026-08-02T09:50:00+05:30" },
+  { train_number: "12301", journey_date: "2026-08-02", delay_minutes: 30, polled_at: "2026-08-03T02:00:00+05:30" },
+]))[0];
+assert.strictEqual(measured.runs, 2);
+assert.strictEqual(measured.measured, 50);
+
+console.log(`stats: 66 build/median/sort/threshold/band/class assertions pass `
+  + `across ${COLS.length} columns, ${SHARE_BINS.length} bands and ${classes.length} classes`);

@@ -229,6 +229,28 @@ only number they ever had.
 While a train is running this is RailRadar's projection, not an observation;
 `status` distinguishes them and the train page labels it.
 
+### Per-class metrics — **SQL still to run**
+`trains.train_type` holds RailRadar's own class for the service ('Rajdhani
+Express', 'Shatabdi Express', 'Superfast Express', 'Mail/Express', 'Train on
+Demand'), taken from the payload rather than guessed from the name — which
+misreads both ways: 15274 Satyagrah looks like a plain express and is
+Mail/Express, the AC Double Deckers are Superfast Express.
+
+- `supabase/schema.sql` — the column, plus `train_summary` exposing it
+- `app/poller.py`, `app/store.py` — `_extract_train_type`, through the upsert
+- `docs/stats.html` — a "By class" section above the table, pooled across
+  journeys rather than averaged over trains
+
+Fills in as each train is next polled: about a day for the dailies, up to a
+week for 13066 (Saturdays) and 05576. Until then a train shows as
+*Unclassified*, sorted last and named as a gap rather than folded into a class.
+
+The **AT ARRIVAL** column is the honesty guard, and the reason this table is
+worth having rather than misleading: the share of a class's journeys read
+within 6 h of the arrival they describe. Long-haul classes sit near 47%, so
+their delays answer "how late partway", not "how late did it arrive". See the
+entry below for why that cannot be fixed by polling differently.
+
 ### RailRadar returns the wrong run for services longer than 24 h
 Separate from the dedup, and still not fixed — no amount of re-polling helps,
 because the problem is *which run is on offer*, not when we ask. For the 12

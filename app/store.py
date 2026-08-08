@@ -46,6 +46,34 @@ def _check(resp: httpx.Response, what: str) -> None:
         raise RuntimeError(f"Supabase {what} failed HTTP {resp.status_code}: {resp.text[:300]}")
 
 
+# Columns this code writes that an un-migrated database may not have yet.
+# supabase/schema.sql is applied by hand -- PostgREST cannot run DDL -- so
+# between deploying and pasting the SQL there is always a window where the
+# poller sends a column the database lacks. PostgREST rejects the whole row for
+# it, which would cost a reading (and, on the trains upsert, fail the run) over
+# a field. Remembered per process so it costs one rejected request, not one per
+# poll; cleared by the next run, which is the run after the SQL is applied.
+_MISSING_COLUMNS: set[str] = set()
+
+
+def _post_row(path: str, row: dict, what: str, *, headers=None, optional: tuple = ()) -> None:
+    """POST one row, dropping any optional column the database doesn't have."""
+    body = {k: v for k, v in row.items() if k not in _MISSING_COLUMNS}
+    post = lambda payload: httpx.post(  # noqa: E731 -- two identical calls, one shape
+        _url(path), headers=headers or _headers(), json=[payload], timeout=TIMEOUT)
+
+    resp = post(body)
+    if resp.status_code >= 400:
+        missing = [k for k in optional if k in body and k in resp.text]
+        if missing:
+            logger.warning("%s: %s not in the database yet -- run supabase/schema.sql. "
+                           "Storing without %s.", what, ", ".join(missing), ", ".join(missing))
+            _MISSING_COLUMNS.update(missing)
+            body = {k: v for k, v in body.items() if k not in missing}
+            resp = post(body)
+    _check(resp, what)
+
+
 def upsert_train(
     train_number: str,
     name: Optional[str],
@@ -55,6 +83,7 @@ def upsert_train(
     arrival_day_offset: Optional[int] = None,
     source_code: Optional[str] = None,
     scheduled_departure: Optional[str] = None,
+    train_type: Optional[str] = None,
 ) -> None:
     if not enabled():
         db.upsert_train(train_number, name)
@@ -75,23 +104,12 @@ def upsert_train(
         row["source_code"] = source_code
     if scheduled_departure:
         row["scheduled_departure"] = scheduled_departure
+    if train_type:
+        row["train_type"] = train_type
 
-    resp = httpx.post(
-        _url("trains"),
-        headers=_headers({"Prefer": "resolution=merge-duplicates"}),
-        json=[row],
-        timeout=TIMEOUT,
-    )
-    _check(resp, "upsert_train")
-
-
-# polls.arrival_delay_minutes ships in supabase/schema.sql, which is applied by
-# hand -- PostgREST cannot run DDL. Between deploying this code and running that
-# SQL, PostgREST rejects the whole insert over the unknown column, which would
-# throw away the reading rather than degrade. So the first rejection drops the
-# field for the rest of the process and the poll still lands. Flips back on the
-# next run, which is the run after the SQL is applied.
-_HAS_ARRIVAL_COLUMN = True
+    _post_row("trains", row, "upsert_train",
+              headers=_headers({"Prefer": "resolution=merge-duplicates"}),
+              optional=("train_type",))
 
 
 def insert_poll(
@@ -120,31 +138,18 @@ def insert_poll(
         )
         return
 
-    global _HAS_ARRIVAL_COLUMN
     # raw is deliberately dropped here -- see supabase/schema.sql.
-    row = {
+    _post_row("polls", {
         "train_number": train_number,
         "journey_date": journey_date or db.today_ist(),
         "polled_at": db.now_ist_iso(),
         "status": status,
         "delay_minutes": delay_minutes,
+        "arrival_delay_minutes": arrival_delay_minutes,
         "current_station_code": current_station_code,
         "current_station_status": current_station_status,
         "railradar_last_updated_at": railradar_last_updated_at,
-    }
-    if _HAS_ARRIVAL_COLUMN:
-        row["arrival_delay_minutes"] = arrival_delay_minutes
-
-    resp = httpx.post(_url("polls"), headers=_headers(), json=[row], timeout=TIMEOUT)
-    if resp.status_code >= 400 and "arrival_delay_minutes" in resp.text:
-        logger.warning(
-            "polls.arrival_delay_minutes is missing -- run supabase/schema.sql. "
-            "Storing this poll without the arrival delay."
-        )
-        _HAS_ARRIVAL_COLUMN = False
-        row.pop("arrival_delay_minutes", None)
-        resp = httpx.post(_url("polls"), headers=_headers(), json=[row], timeout=TIMEOUT)
-    _check(resp, "insert_poll")
+    }, "insert_poll", optional=("arrival_delay_minutes",))
 
 
 def record_run(due_count: int, ok_count: int, failed_count: int) -> None:

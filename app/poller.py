@@ -95,6 +95,21 @@ def _extract_start_date(data: dict) -> Optional[str]:
     return str(value)[:10] if value else None
 
 
+def _extract_train_type(data: dict) -> Optional[str]:
+    """
+    RailRadar's own class for the service: 'Rajdhani Express', 'Shatabdi
+    Express', 'Superfast Express', 'Mail/Express', 'Train on Demand'.
+
+    Taken from the payload rather than guessed from the name, which gets it
+    wrong in both directions: 15274 Satyagrah Express reads as a plain express
+    by name but is 'Mail/Express', and the AC Double Deckers are 'Superfast
+    Express' rather than a class of their own. A name is marketing; this is
+    the operator's category.
+    """
+    value = ((data.get("train") or {}).get("type") or "").strip()
+    return value or None
+
+
 def _extract_run_days(data: dict) -> Optional[list[str]]:
     """
     Days the train DEPARTS its source, e.g. ['tue','thu','fri','sun'].
@@ -192,6 +207,7 @@ def poll_train(client: RailRadarClient, train_number: str) -> bool:
         arrival_day_offset=_extract_arrival_offset(data),
         source_code=src_code,
         scheduled_departure=sched_departure,
+        train_type=_extract_train_type(data),
     )
     store.insert_poll(
         train_number=train_number,

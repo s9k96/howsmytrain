@@ -26,6 +26,13 @@ alter table trains add column if not exists run_days text[];
 alter table trains add column if not exists arrival_day_offset integer not null default 0;
 alter table trains add column if not exists source_code text;
 alter table trains add column if not exists scheduled_departure time;
+-- RailRadar's own class for the service -- 'Rajdhani Express', 'Shatabdi
+-- Express', 'Superfast Express', 'Mail/Express', 'Train on Demand'. Taken from
+-- the payload rather than guessed from the name, which misreads both ways:
+-- 15274 Satyagrah looks like a plain express and is Mail/Express, the AC
+-- Double Deckers are Superfast Express. Fills in as each train is next polled,
+-- so it is null for a train not seen since this shipped.
+alter table trains add column if not exists train_type text;
 
 create table if not exists polls (
     id                        bigserial primary key,
@@ -174,6 +181,7 @@ with (security_invoker = on) as
 select
     t.train_number,
     t.name,
+    t.train_type,
     t.source_code,
     t.destination_code,
     t.scheduled_departure,
@@ -189,7 +197,7 @@ select
     end                                                     as on_time_pct
 from trains t
 left join daily_delays d using (train_number)
-group by t.train_number, t.name, t.source_code, t.destination_code,
+group by t.train_number, t.name, t.train_type, t.source_code, t.destination_code,
          t.scheduled_departure, t.scheduled_arrival, t.run_days,
          t.arrival_day_offset, t.updated_at, t.created_at;
 

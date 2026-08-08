@@ -48,6 +48,12 @@
 
   .stats-note { margin-top: 18px; }
 
+  /* The measurement caveat earns a colour once most of a class was read
+     mid-journey. styles.css scopes .warn to pills and stat values, so on a
+     plain cell it is inert -- spelled out here rather than left as a class
+     that looks like it does something. */
+  #classes td.warn { color: var(--late); }
+
   /* An inline "undo" for the threshold, in the sentence that reports it. */
   .linky {
     all: unset;
@@ -111,6 +117,25 @@
       </div>
       <div class="dist" id="dist"></div>
     </div>
+
+    <section class="band">
+      <div class="band-head">
+        <h2>By class</h2>
+      </div>
+      <div class="table-scroll" id="classes"></div>
+      <p class="waiting-note stats-note">
+        RailRadar's own classification, not ours, and always the whole fleet —
+        the filters below don't reach it. Figures are pooled across every
+        journey in the class rather than averaged over its trains, so a service
+        seen once doesn't count as loudly as one seen weekly.
+        <b>AT ARRIVAL</b> is the share of those journeys read within
+        <b>6 h</b> of the arrival they describe: for services scheduled longer
+        than a day the live endpoint usually returns the run that departed most
+        recently rather than the one arriving, so their delays describe a train
+        still mid-journey. A low figure means read that row as
+        <i>how late partway</i>, not <i>how late it arrived</i>.
+      </p>
+    </section>
 
     <section class="band">
       <div class="band-head">
@@ -184,6 +209,68 @@ function binOf(share) {
 }
 
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+const hasDelay = (j) => j.delay_minutes !== null && j.delay_minutes !== undefined;
+
+// ---------------------------------------------------------------------------
+// Was this reading taken anywhere near the arrival it describes?
+//
+// The class table lives or dies on this. RailRadar's live endpoint returns the
+// run it considers active, and for a service scheduled longer than 24 h that
+// is usually the one that departed most recently -- not the one arriving now.
+// So those trains get read mid-journey: 54 of 88 long-haul journeys on record
+// were read more than six hours out, against 14 of 242 everywhere else. Their
+// figures answer "how late was it partway" while every other row answers "how
+// late did it arrive", and a table that silently mixes the two would make the
+// long-haul classes look worse (or better) than measurement can support.
+// ---------------------------------------------------------------------------
+const AT_ARRIVAL_HOURS = 6;
+
+/** Scheduled arrival of one journey as an instant, or null if unknown. */
+function arrivalOf(t, journeyDate) {
+  if (!t.scheduled_arrival || !journeyDate) return null;
+  // Schedules are IST clock times; say so rather than inherit the viewer's zone.
+  const at = new Date(`${journeyDate}T${String(t.scheduled_arrival).slice(0, 8)}+05:30`);
+  if (isNaN(at)) return null;
+  // Whole days added in milliseconds: setDate() would shift by a local day,
+  // which is not 24 h in a zone that observes DST.
+  return new Date(at.getTime() + (t.arrival_day_offset || 0) * 864e5);
+}
+
+function nearArrival(t, j) {
+  const at = arrivalOf(t, j.journey_date);
+  if (!at || !j.polled_at) return false;
+  return at - new Date(j.polled_at) <= AT_ARRIVAL_HOURS * 36e5;
+}
+
+/**
+ * Journeys rolled up by RailRadar's class for the service.
+ *
+ * Pooled from the journeys themselves, never by averaging the per-train
+ * averages: a class holding one train with nine runs and one with a single run
+ * is not the mean of two numbers, and doing it that way would let a train seen
+ * once outvote a train seen weekly.
+ */
+function byClass(list) {
+  const groups = {};
+  for (const r of list) {
+    const key = r.t.train_type || "Unclassified";
+    const g = (groups[key] ||= { key, trains: 0, delays: [], atArrival: 0 });
+    g.trains += 1;
+    g.delays = g.delays.concat(r.delays);
+    g.atArrival += r.atArrival;
+  }
+  return Object.values(groups).map(g => ({
+    ...g,
+    runs: g.delays.length,
+    med: median(g.delays),
+    avg: mean(g.delays),
+    worst: g.delays.length ? Math.max(...g.delays) : null,
+    onTime: g.delays.length
+      ? 100 * g.delays.filter(d => band(d).cls === "good").length / g.delays.length
+      : null,
+    measured: g.delays.length ? 100 * g.atArrival / g.delays.length : null,
+  })).sort((a, b) => (b.med === null ? -1 : b.med) - (a.med === null ? -1 : a.med));
+}
 
 // ---------------------------------------------------------------------------
 // Columns
@@ -235,7 +322,10 @@ function build(trains, journeys) {
     const span = journeyMinutes(t);
     const avg = delays.length ? mean(delays) : null;
     return {
-      t, span,
+      t, span, delays,
+      // Counted over the journeys that contributed a delay, so it can be read
+      // as a share of RUNS and can never exceed it.
+      atArrival: seen.filter(j => hasDelay(j) && nearArrival(t, j)).length,
       runs: delays.length,
       unusable: seen.length - delays.length,
       avg,
@@ -271,6 +361,45 @@ const pct = (v, digits = 0) => (v === null ? "—" : `${v.toFixed(digits)}%`);
 function delayNum(v) {
   if (v === null) return '<span class="dim">—</span>';
   return `<span style="color:${scaleOf(v)};font-weight:600">${fmtDelay(Math.round(v))}</span>`;
+}
+
+function renderClasses(list) {
+  const el = document.getElementById("classes");
+  const groups = byClass(list);
+  if (!groups.length) {
+    el.innerHTML = `<div class="empty-state">No services tracked yet.</div>`;
+    return;
+  }
+  // Unclassified is a gap, not a class: it holds trains not polled since the
+  // class column shipped, and it empties itself. Named as such and sorted last
+  // rather than ranked among real classes on a median it happens to have.
+  const known = groups.filter(g => g.key !== "Unclassified");
+  const rest = groups.filter(g => g.key === "Unclassified");
+
+  el.innerHTML = `
+    <table class="tabular">
+      <thead><tr>
+        <th>CLASS</th>
+        <th class="num" title="Services of this class in the fleet">TRAINS</th>
+        <th class="num" title="Journeys with a usable delay reading">RUNS</th>
+        <th class="num" title="Share of those journeys arriving within 10 minutes">ON TIME</th>
+        <th class="num" title="Half this class's journeys were later than this">MEDIAN</th>
+        <th class="num">AVG</th>
+        <th class="num">WORST</th>
+        <th class="num" title="Share of those journeys read within 6 h of the arrival they describe">AT ARRIVAL</th>
+      </tr></thead>
+      <tbody>${known.concat(rest).map(g => `
+        <tr${g.key === "Unclassified" ? ' class="dim"' : ""}>
+          <td>${esc(g.key)}</td>
+          <td class="num">${g.trains}</td>
+          <td class="num">${g.runs}</td>
+          <td class="num">${pct(g.onTime)}</td>
+          <td class="num">${delayNum(g.med)}</td>
+          <td class="num">${delayNum(g.avg)}</td>
+          <td class="num">${delayNum(g.worst)}</td>
+          <td class="num ${g.measured !== null && g.measured < 50 ? "warn" : ""}">${pct(g.measured)}</td>
+        </tr>`).join("")}</tbody>
+    </table>`;
 }
 
 function render(list) {
@@ -448,11 +577,16 @@ async function main() {
       // past PostgREST's 1000-row cap in about a month, so it is ordered and
       // let sb() page through -- unordered, the rows dropped at the cap would
       // have been the newest journeys, silently.
-      sb("daily_delays", "select=train_number,journey_date,delay_minutes&order=journey_date.desc"),
+      //
+      // polled_at rides along so the class table can say how much of each
+      // class was read near its arrival rather than hours short of it.
+      sb("daily_delays",
+         "select=train_number,journey_date,delay_minutes,polled_at&order=journey_date.desc"),
       sb("poller_runs", "select=ran_at&order=ran_at.desc&limit=1").catch(() => []),
     ]);
 
     rows = build(trains, journeys);
+    renderClasses(rows);      // whole fleet, deliberately outside applyFilter()
     applyFilter();
     setPolled(runs.length ? new Date(runs[0].ran_at) : null);
 
