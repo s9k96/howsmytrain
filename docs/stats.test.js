@@ -208,9 +208,34 @@ assert.notStrictEqual(byKey["Rajdhani Express"].avg, 36);
 assert.strictEqual(byKey["Shatabdi Express"].runs, 1, "a journey with no delay is not a run");
 assert.strictEqual(byKey["Shatabdi Express"].med, 4);
 
-// Worst class first: the table's job is to say which class to worry about.
+// Worst class first, by the same column the table below sorts on, so the two
+// agree about which service is worst.
 // Spread into this realm, as above -- the vm's Array.prototype fails deepStrictEqual.
 assert.deepStrictEqual([...classes.map(g => g.key)], ["Rajdhani Express", "Shatabdi Express"]);
+
+// DELAY % must mean the same thing at both scales. For a class of one train it
+// has to come out identical to that train's own avg/span, or the class row and
+// the train row disagree while claiming to be the same statistic.
+const oneTrain = build([sht], [
+  { train_number: "12005", journey_date: "2026-08-01", delay_minutes: 12 },
+  { train_number: "12005", journey_date: "2026-08-02", delay_minutes: 24 },
+]);
+assert.strictEqual(byClass(oneTrain)[0].share, oneTrain[0].share);
+assert.strictEqual(oneTrain[0].share, 18 / 240);   // avg 18 over a 4 h run
+
+// Pooled across trains of different lengths, each journey is weighed against
+// its own train's run. 192 min over 1020 min of schedule, across 4 journeys.
+assert.ok(Math.abs(byKey["Rajdhani Express"].share - (192 / 1020) / 4) < 1e-12);
+
+// A train with no known schedule has no share, and must drop out of both
+// halves of the average rather than count as a punctual zero.
+const noSpan = byClass(build(
+  [{ train_number: "99999", name: "New", train_type: "Rajdhani Express" }, sht],
+  [{ train_number: "99999", journey_date: "2026-08-01", delay_minutes: 300 }],
+));
+assert.strictEqual(noSpan.find(g => g.key === "Rajdhani Express").share, null);
+assert.strictEqual(noSpan.find(g => g.key === "Rajdhani Express").runs, 1,
+  "it still counts as an observed journey -- only the share is unknowable");
 
 // A train never polled since the class column shipped has no class. That is a
 // gap, not a category, so it must not be silently folded into a real one.
@@ -244,5 +269,5 @@ const measured = byClass(build([raj], [
 assert.strictEqual(measured.runs, 2);
 assert.strictEqual(measured.measured, 50);
 
-console.log(`stats: 66 build/median/sort/threshold/band/class assertions pass `
+console.log(`stats: 71 build/median/sort/threshold/band/class assertions pass `
   + `across ${COLS.length} columns, ${SHARE_BINS.length} bands and ${classes.length} classes`);

@@ -66,6 +66,33 @@
   .notes-grid .waiting-note { max-width: none; }
   .notes-grid .waiting-note:last-child { margin-bottom: 0; }
 
+  /* Class rows filter the table below. The whole row is the target; the button
+     exists so the control is real for keyboard and screen readers, and carries
+     aria-pressed as the state. Same idiom as the histogram bars above. */
+  #classes tbody tr { cursor: pointer; }
+  #classes tbody tr:hover { background: var(--surface); }
+  #classes .class-pick {
+    all: unset;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+  }
+  #classes .class-pick:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  /* Selecting dims the rest rather than hiding them -- the other classes are
+     the context that makes the selected one mean anything. */
+  #classes table.has-sel tbody tr:not(.sel) { opacity: 0.35; }
+  #classes tbody tr.sel .class-pick { font-weight: 600; }
+
+  /* Names the filter in the heading of the table it filters. */
+  .chip {
+    font: 400 11px/1 var(--mono);
+    letter-spacing: 0.04em;
+    color: var(--text-2);
+    white-space: nowrap;
+  }
+  .chip::before { content: "· "; color: var(--text-3); }
+
   /* The measurement caveat earns a colour once most of a class was read
      mid-journey. styles.css scopes .warn to pills and stat values, so on a
      plain cell it is inert -- spelled out here rather than left as a class
@@ -145,7 +172,7 @@
 
     <section class="band">
       <div class="band-head">
-        <h2>All trains</h2>
+        <h2>All trains<span id="classchip"></span></h2>
         <div class="toolbar">
           <input class="search" id="filter" type="search"
                  placeholder="FILTER BY NUMBER, NAME OR CODE" aria-label="Filter trains">
@@ -174,7 +201,8 @@
             fleet — the filters on <b>All trains</b> don't reach it. Figures are
             pooled across every journey in the class rather than averaged over
             its trains, so a service seen once doesn't count as loudly as one
-            seen weekly.
+            seen weekly. <b>Click a class</b> to narrow the table below to its
+            trains; click it again to go back to the fleet.
           </p>
           <p class="waiting-note">
             <b>AT ARRIVAL</b> is the share of those journeys read within
@@ -217,6 +245,7 @@ let sortKey = "share";      // worst punctuality relative to run length first
 let sortDir = "desc";
 let minRuns = 0;            // hide services with fewer observed journeys than this
 let shareBin = null;        // index into SHARE_BINS, or null for no band selected
+let classFilter = null;     // a train_type, or null for the whole fleet
 
 // ---------------------------------------------------------------------------
 // Distribution bands
@@ -292,10 +321,17 @@ function byClass(list) {
   const groups = {};
   for (const r of list) {
     const key = r.t.train_type || "Unclassified";
-    const g = (groups[key] ||= { key, trains: 0, delays: [], atArrival: 0 });
+    const g = (groups[key] ||= { key, trains: 0, delays: [], atArrival: 0,
+                                 shareSum: 0, shareRuns: 0 });
     g.trains += 1;
     g.delays = g.delays.concat(r.delays);
     g.atArrival += r.atArrival;
+    // A train whose schedule we don't know yet has no share, and must drop out
+    // of both halves of the average rather than count as a zero.
+    if (r.span) {
+      g.shareSum += r.delays.reduce((a, d) => a + d, 0) / r.span;
+      g.shareRuns += r.delays.length;
+    }
   }
   return Object.values(groups).map(g => ({
     ...g,
@@ -306,8 +342,16 @@ function byClass(list) {
     onTime: g.delays.length
       ? 100 * g.delays.filter(d => band(d).cls === "good").length / g.delays.length
       : null,
+    // Same definition as the per-train column, pooled the same way: each
+    // journey's delay against its own train's scheduled length, then averaged
+    // over journeys. For a class of one train it comes out identical to
+    // avg/span, which is the check that the two columns mean the same thing.
+    share: g.shareRuns ? g.shareSum / g.shareRuns : null,
     measured: g.delays.length ? 100 * g.atArrival / g.delays.length : null,
-  })).sort((a, b) => (b.med === null ? -1 : b.med) - (a.med === null ? -1 : a.med));
+    // Sorted by the one column that compares a Shatabdi to a thirty-hour
+    // long-haul fairly -- the same default the table below uses, so the two
+    // agree about which service is worst.
+  })).sort((a, b) => (b.share === null ? -1 : b.share) - (a.share === null ? -1 : a.share));
 }
 
 // ---------------------------------------------------------------------------
@@ -414,30 +458,50 @@ function renderClasses(list) {
   const known = groups.filter(g => g.key !== "Unclassified");
   const rest = groups.filter(g => g.key === "Unclassified");
 
+  // Columns in the same order as the table below, so a class row and one of
+  // its trains read as the same statement at two scales.
   el.innerHTML = `
-    <table class="tabular">
+    <table class="tabular${classFilter === null ? "" : " has-sel"}">
       <thead><tr>
         <th>CLASS</th>
         <th class="num" title="Services of this class in the fleet">TRAINS</th>
         <th class="num" title="Journeys with a usable delay reading">RUNS</th>
         <th class="num" title="Share of those journeys arriving within 10 minutes">ON TIME</th>
-        <th class="num" title="Half this class's journeys were later than this">MEDIAN</th>
         <th class="num">AVG</th>
+        <th class="num" title="Half this class's journeys were later than this">MEDIAN</th>
         <th class="num">WORST</th>
+        <th class="num" title="Average delay as a share of the scheduled journey time">DELAY %</th>
         <th class="num" title="Share of those journeys read within 6 h of the arrival they describe">AT ARRIVAL</th>
       </tr></thead>
-      <tbody>${known.concat(rest).map(g => `
-        <tr${g.key === "Unclassified" ? ' class="dim"' : ""}>
-          <td>${esc(g.key)}</td>
+      <tbody>${known.concat(rest).map(g => {
+        const sel = classFilter === g.key;
+        return `
+        <tr data-class="${esc(g.key)}" class="${sel ? "sel " : ""}${g.key === "Unclassified" ? "dim" : ""}">
+          <td><button type="button" class="class-pick" aria-pressed="${sel}"
+                title="Show only ${esc(g.key)} services below">${esc(g.key)}</button></td>
           <td class="num">${g.trains}</td>
           <td class="num">${g.runs}</td>
           <td class="num">${pct(g.onTime)}</td>
-          <td class="num">${delayNum(g.med)}</td>
           <td class="num">${delayNum(g.avg)}</td>
+          <td class="num">${delayNum(g.med)}</td>
           <td class="num">${delayNum(g.worst)}</td>
+          <td class="num">${g.share === null ? "—" : pct(100 * g.share, 1)}</td>
           <td class="num ${g.measured !== null && g.measured < 50 ? "warn" : ""}">${pct(g.measured)}</td>
-        </tr>`).join("")}</tbody>
+        </tr>`; }).join("")}</tbody>
     </table>`;
+
+  // One handler on the row: the button's own click bubbles to it, so a mouse
+  // anywhere on the row and a keyboard Enter on the name take the same path.
+  el.querySelectorAll("tr[data-class]").forEach(tr => {
+    tr.addEventListener("click", () => setClass(tr.dataset.class));
+  });
+}
+
+/** Toggle the class filter. Clicking the selected class again clears it. */
+function setClass(name) {
+  classFilter = classFilter === name ? null : name;
+  renderClasses(rows);
+  applyFilter();
 }
 
 function render(list) {
@@ -449,6 +513,7 @@ function render(list) {
     el.innerHTML = `<div class="empty-state">${
       shareBin !== null ? `No service in this scope is delayed by ${SHARE_BINS[shareBin].full} of its journey time.`
       : minRuns ? `No tracked service has ${minRuns} or more observed journeys yet.`
+      : classFilter !== null ? `No ${esc(classFilter)} service matches that filter.`
       : "No tracked service matches that filter."
     }</div>`;
     return;
@@ -513,8 +578,17 @@ function render(list) {
 function applyFilter() {
   const q = document.getElementById("filter").value.trim().toLowerCase();
   const scoped = rows.filter(({ t }) =>
-    !q || [t.train_number, t.name, t.source_code, t.destination_code]
-      .some(v => String(v ?? "").toLowerCase().includes(q)));
+    (classFilter === null || (t.train_type || "Unclassified") === classFilter) &&
+    (!q || [t.train_number, t.name, t.source_code, t.destination_code]
+      .some(v => String(v ?? "").toLowerCase().includes(q))));
+
+  // A filtered table that doesn't say so is how a class average gets read as
+  // the fleet's. The heading carries it, next to the way back out.
+  document.getElementById("classchip").innerHTML = classFilter === null ? ""
+    : ` <span class="chip">${esc(classFilter)}
+        <button type="button" class="linky" id="clearclass">clear</button></span>`;
+  const clear = document.getElementById("clearclass");
+  if (clear) clear.addEventListener("click", () => setClass(classFilter));
 
   const eligible = scoped.filter(r => r.runs >= minRuns);
   // The histogram counts the scope BEFORE the band selection, so picking a
