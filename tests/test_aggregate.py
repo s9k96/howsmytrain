@@ -3,11 +3,13 @@ import time
 from app import aggregate, db
 
 
-def _insert(train_number, journey_date, delay_minutes, status="running", station="NDLS"):  # noqa: E302
+def _insert(train_number, journey_date, delay_minutes, status="running", station="NDLS",
+            arrival_delay_minutes=None):  # noqa: E302
     db.insert_poll(
         train_number=train_number,
         status=status,
         delay_minutes=delay_minutes,
+        arrival_delay_minutes=arrival_delay_minutes,
         current_station_code=station,
         current_station_status="departed",
         railradar_last_updated_at=None,
@@ -97,6 +99,41 @@ def test_a_cancelled_poll_does_not_hide_a_real_one(temp_db):
     assert len(rows) == 1
     assert rows[0]["delay_minutes"] == 18
     assert rows[0]["on_time"] is False
+
+
+def test_the_arrival_delay_is_the_one_reported(temp_db):
+    # Read 20 min down where it had reached, projected 45 min late into its
+    # destination. Every page says "arrived late by", so 45 is the answer --
+    # and it crosses the on-time line that 20 also crossed, in the right
+    # direction for once.
+    db.upsert_train("12584", "Lucknow AC Double Decker")
+    _insert("12584", "2026-07-26", delay_minutes=20, arrival_delay_minutes=45)
+
+    rows = aggregate.daily_stats(train_number="12584", days=30)
+    assert rows[0]["delay_minutes"] == 45
+    assert rows[0]["on_time"] is False
+
+
+def test_history_without_an_arrival_delay_keeps_its_own_number(temp_db):
+    # Every poll before the column existed has only the position delay. The
+    # fallback is what stops a schema change quietly blanking months of data.
+    db.upsert_train("12005", "Kalka Shatabdi")
+    _insert("12005", "2026-07-26", delay_minutes=8, arrival_delay_minutes=None)
+
+    rows = aggregate.daily_stats(train_number="12005", days=30)
+    assert rows[0]["delay_minutes"] == 8
+    assert rows[0]["on_time"] is True
+
+
+def test_a_poll_carrying_only_an_arrival_delay_counts_as_a_reading(temp_db):
+    # "Latest poll that measured anything" has to consider both columns, or a
+    # later arrival-only reading loses to an earlier position-only one.
+    db.upsert_train("12423", "New Delhi Rajdhani")
+    _insert("12423", "2026-07-26", delay_minutes=30)
+    _insert("12423", "2026-07-26", delay_minutes=None, arrival_delay_minutes=150)
+
+    rows = aggregate.daily_stats(train_number="12423", days=30)
+    assert rows[0]["delay_minutes"] == 150
 
 
 def test_daily_stats_on_time_threshold(temp_db):

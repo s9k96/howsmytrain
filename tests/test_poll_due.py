@@ -20,11 +20,28 @@ from poll_due import _due_now
 NOW = datetime(2026, 7, 26, 22, 30)  # 22:30 IST
 
 
-def seen(at, delay=None, status="completed", times=None):
+def seen(at, delay=None, status="completed", times=None,
+         arrival_delay=None, journey="2026-07-26"):
     """One store.last_readings entry. Defaults to a finished run, which is the
     boring case: only a *running* reading moves the window."""
+    reading = {"at": at, "delay_minutes": delay, "status": status,
+               "arrival_delay_minutes": arrival_delay}
+    return {**reading,
+            "times": times if times is not None else [at],
+            "journeys": {journey: reading}}
+
+
+def reading(at, delay, status="running", arrival_delay=None):
     return {"at": at, "delay_minutes": delay, "status": status,
-            "times": times if times is not None else [at]}
+            "arrival_delay_minutes": delay if arrival_delay is None else arrival_delay}
+
+
+def readings(by_journey):
+    """A train seen across several runs; the newest reading is the train's."""
+    latest = max(by_journey.values(), key=lambda r: r["at"])
+    return {**latest,
+            "times": sorted(r["at"] for r in by_journey.values()),
+            "journeys": by_journey}
 
 
 def _train(number, arrival):
@@ -251,6 +268,53 @@ def test_no_more_than_three_polls_a_day_however_late_it_gets():
     two = seen(datetime(2026, 7, 26, 21, 20), delay=180, status="running",
                times=[day.replace(hour=h, minute=20) for h in (20, 21)])
     assert _due_now(_shatabdi(), datetime(2026, 7, 27, 0, 10), {"12005": two}) == ["12005"]
+
+
+def test_the_shift_follows_the_projected_arrival_not_the_current_position():
+    # Same payload, two different delays: 30 min where the train has reached,
+    # 3 h projected at its destination. The second is what decides whether a
+    # follow-up is worth a request -- the first is already inside the window.
+    losing = readings({"2026-07-26": reading(datetime(2026, 7, 26, 21, 20),
+                                             delay=30, arrival_delay=180)})
+    assert _due_now(_shatabdi(), datetime(2026, 7, 27, 0, 10), {"12005": losing}) == ["12005"]
+
+    # And the reverse. Two hours down right now, but expected to make nearly
+    # all of it up: the ordinary window covers that, so no second request.
+    recovering = readings({"2026-07-26": reading(datetime(2026, 7, 26, 21, 20),
+                                                 delay=180, arrival_delay=20)})
+    assert _due_now(_shatabdi(), datetime(2026, 7, 27, 0, 10), {"12005": recovering}) == []
+
+
+def test_a_substitution_before_the_window_does_not_cancel_the_chase():
+    # Read at 21:20 running 3 h down, then read again at 22:00 -- and that
+    # second poll came back describing the NEXT departure, on time. Judged by
+    # the newest reading alone the train looks recovered and the late run is
+    # dropped, never having been seen to finish. Judged by run, it is still
+    # out there and its window at 00:15 is still worth a request.
+    state = readings({
+        "2026-07-26": reading(datetime(2026, 7, 26, 21, 20), delay=180),
+        "2026-07-27": reading(datetime(2026, 7, 26, 22, 0), delay=2),
+    })
+    assert _due_now(_shatabdi(), datetime(2026, 7, 27, 0, 10), {"12005": state}) == ["12005"]
+
+
+def test_the_chase_gets_one_attempt_and_no_more():
+    # Same setup, except the substitution arrived *inside* the shifted window:
+    # we have already spent the follow-up. Asking again is speculative -- the
+    # endpoint having moved to the newer run rarely moves back -- and replayed
+    # at 40.1 requests/day against a cap of 50.
+    state = readings({
+        "2026-07-26": reading(datetime(2026, 7, 26, 21, 20), delay=180),
+        "2026-07-27": reading(datetime(2026, 7, 27, 0, 10), delay=2),
+    })
+    assert _due_now(_shatabdi(), datetime(2026, 7, 27, 0, 25), {"12005": state}) == []
+
+
+def test_a_follow_up_answered_about_the_chased_run_does_end_it():
+    state = readings({
+        "2026-07-26": reading(datetime(2026, 7, 27, 0, 10), delay=180),
+    })
+    assert _due_now(_shatabdi(), datetime(2026, 7, 27, 0, 25), {"12005": state}) == []
 
 
 def test_the_unshifted_window_still_works_while_it_is_open():

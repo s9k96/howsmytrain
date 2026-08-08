@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS polls (
     polled_at TEXT NOT NULL,
     status TEXT,
     delay_minutes INTEGER,
+    arrival_delay_minutes INTEGER,
     current_station_code TEXT,
     current_station_status TEXT,
     railradar_last_updated_at TEXT,
@@ -49,11 +50,20 @@ CREATE INDEX IF NOT EXISTS idx_polls_train_date ON polls (train_number, journey_
 CREATE INDEX IF NOT EXISTS idx_polls_polled_at ON polls (polled_at);
 """
 
+# Columns added after the table shipped. CREATE TABLE IF NOT EXISTS is a no-op
+# on an existing table, so a local DB from before the column existed needs this.
+_MIGRATIONS = {"polls": {"arrival_delay_minutes": "INTEGER"}}
+
 
 def init_db() -> None:
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_connection() as conn:
         conn.executescript(SCHEMA)
+        for table, columns in _MIGRATIONS.items():
+            have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for name, decl in columns.items():
+                if name not in have:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 @contextmanager
@@ -99,15 +109,16 @@ def insert_poll(
     railradar_last_updated_at: Optional[str],
     raw: dict,
     journey_date: Optional[str] = None,
+    arrival_delay_minutes: Optional[int] = None,
 ) -> None:
     with get_connection() as conn:
         conn.execute(
             """
             INSERT INTO polls (
                 train_number, journey_date, polled_at, status, delay_minutes,
-                current_station_code, current_station_status,
+                arrival_delay_minutes, current_station_code, current_station_status,
                 railradar_last_updated_at, raw_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 train_number,
@@ -115,6 +126,7 @@ def insert_poll(
                 now_ist_iso(),
                 status,
                 delay_minutes,
+                arrival_delay_minutes,
                 current_station_code,
                 current_station_status,
                 railradar_last_updated_at,
@@ -161,6 +173,12 @@ def list_polls(
 # same as excluded, and in SQL `NOT IN` on a null drops the row silently.
 _REAL_JOURNEY = "(p.status IS NULL OR p.status NOT IN ('not-started', 'cancelled'))"
 
+# The delay the site actually means: how late the train reached its
+# destination, falling back to how late it was where we last saw it. Rows
+# predating the column have no arrival delay, so history keeps the only number
+# it ever had. Kept identical to the `daily_delays` view in supabase/schema.sql.
+_DELAY = "COALESCE(p.arrival_delay_minutes, p.delay_minutes)"
+
 
 def list_journey_final_delays(
     train_number: Optional[str] = None,
@@ -180,12 +198,16 @@ def list_journey_final_delays(
     Mirrors the `daily_delays` view in supabase/schema.sql; keep the two in step.
     """
     query = """
-        SELECT p.*
+        SELECT p.train_number, p.journey_date, p.polled_at, p.status,
+               {delay} AS delay_minutes,
+               p.delay_minutes AS position_delay_minutes,
+               p.arrival_delay_minutes,
+               p.current_station_code, p.current_station_status
         FROM polls p
         INNER JOIN (
             SELECT train_number, journey_date,
                    COALESCE(
-                       MAX(CASE WHEN delay_minutes IS NOT NULL THEN polled_at END),
+                       MAX(CASE WHEN {delay} IS NOT NULL THEN polled_at END),
                        MAX(polled_at)
                    ) AS max_polled_at
             FROM polls p
@@ -210,6 +232,6 @@ def list_journey_final_delays(
         date_filter = "AND p.journey_date >= ?"
         params.append(since_date)
     query = query.format(train_filter=train_filter, date_filter=date_filter,
-                         real_journey=_REAL_JOURNEY)
+                         real_journey=_REAL_JOURNEY, delay=_DELAY)
     with get_connection() as conn:
         return conn.execute(query, params).fetchall()

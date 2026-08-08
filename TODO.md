@@ -206,18 +206,49 @@ to re-run: the column list is unchanged.
 Still open: 12553 costs a request a day to be told "cancelled" again. Decide
 whether it keeps its slot.
 
-### RailRadar returns the wrong run for services longer than 24 h
-Separate from the dedup, and not fixed. Polling near arrival is supposed to
-catch a near-final delay, but for the 12 long-haul services the endpoint may
-return the run that departed *later* and is still mid-journey — so we record a
-mid-run reading of a different journey and never see the one that just arrived.
-12621 on 2026-07-30 is the worked example: seven readings of the 29 Jul
-departure, nothing for the run that arrived that morning.
+### ~~We stored the delay where the train was, not where it was going~~ — code fixed 2026-08-08, **SQL still to run**
+Every page says "arrived late by". The number underneath was the payload's
+top-level `delayMinutes`: how late the train was at the station it had reached
+when we looked. Those agree only for a train read near the end of its run.
+12584 was stored at 58 and 59 minutes on two polls whose own payloads projected
+it into Lucknow 64 and 72 minutes late.
 
-`app/poller.py` now logs `journey=<startDate>` on every poll, so the
-substitution is visible in the Actions log instead of silent. A real fix needs
-the endpoint to accept a departure date (or picking the run out of a schedule
-listing), so it is worth doing only if long-haul accuracy starts mattering.
+The right number was already in the response we pay for — `route[-1]`, the
+destination stop, carries `delayArrival` alongside `scheduledArrival` and
+`actualArrival`. Now stored beside the old one rather than replacing it: the
+position delay is a fact we observed, and rows predating the column keep the
+only number they ever had.
+
+- `app/poller.py` — `_extract_arrival_delay`, off the last route entry
+- `app/db.py`, `app/store.py` — new `arrival_delay_minutes` column, and a
+  degrade path so a poll still lands while the SQL below is unapplied
+- `supabase/schema.sql` — the column, and `daily_delays.delay_minutes` becomes
+  `coalesce(arrival_delay_minutes, delay_minutes)` with the raw pair appended
+- **not live until `supabase/schema.sql` is run in the SQL editor**
+
+While a train is running this is RailRadar's projection, not an observation;
+`status` distinguishes them and the train page labels it.
+
+### RailRadar returns the wrong run for services longer than 24 h
+Separate from the dedup, and still not fixed — no amount of re-polling helps,
+because the problem is *which run is on offer*, not when we ask. For the 12
+long-haul services the endpoint may return the run that departed later and is
+still mid-journey, so we record a mid-run reading of a different journey and
+never see the one that just arrived. Measured 2026-08-08: 54 of 88 long-haul
+journeys have a final reading taken more than 6 h before arrival, against 14 of
+242 everywhere else. 12723 is the clean example — every poll at its 08:00
+arrival returns a run arriving 24.0 h later, because a fresh 12723 left at
+06:00 that morning.
+
+It is not simply "long trains are broken": 12615 (34h55) and 15274 resolve
+correctly most days, so the endpoint's choice of active run is inconsistent.
+12553 and 12423 never do.
+
+`app/poller.py` logs `journey=<startDate>` on every poll, so the substitution
+is visible in the Actions log instead of silent, and the follow-up logic below
+no longer treats a substituted answer as the answer. A real fix needs the
+endpoint to accept a departure date. Until then the projected arrival delay is
+the only honest number available for these trains.
 
 ### Dashboard is coupled to the `journey_date` migration
 `docs/index.html` answers "did today's run report?" from `polled_at`, not
@@ -269,6 +300,30 @@ follow-ups land exactly where they should: 05580 on 07-27 and 07-29, 05576 on
 Also capped by `MAX_SHIFT` (12 h, so a garbled payload cannot send the poller
 chasing a train days out) and `MAX_POLLS_PER_DAY` (3, so a train that keeps
 slipping cannot eat the budget alone).
+
+**Refined 2026-08-08, two ways.** The shift now uses the *projected arrival*
+delay rather than the delay where the train was last seen — re-aiming at where
+it is going instead of where it already was. And a follow-up is no longer
+closed by an answer about a different departure: 15274's follow-up on
+2026-08-07 came back describing the next day's run, 21 h from its own arrival,
+which read as "we looked again" and dropped the late run silently. The chase is
+now keyed on the run (`store.last_readings` returns a per-journey map).
+
+That guard has to be bounded or it is worse than the bug. Replayed over
+2026-08-01..07:
+
+| | calls/day | peak |
+|---|---|---|
+| before | 34.6 | 38 |
+| `MAX_CHASE_ATTEMPTS = 1` | 37.4 | 44 |
+| retry until `MAX_POLLS_PER_DAY` | 40.1 | 51 |
+
+The unbounded version breaks the 50/day cap, and its extra spend went to
+12615, 12423 and 15274 — the trains whose arriving run the endpoint never
+returns anyway, so it bought nothing. One attempt keeps what matters: a
+substitution seen *before* the shifted window opens no longer cancels the
+chase. Peak 44 leaves about 5 requests of headroom; dropping 12553 (see above)
+would pay for 12584 rejoining the fleet.
 
 ### Monthly full refresh
 `run_days` is refreshed on every poll, so timetable changes propagate — but

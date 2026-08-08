@@ -43,6 +43,33 @@ def _extract_delay_minutes(data: dict) -> Optional[int]:
         return None
 
 
+def _extract_arrival_delay(data: dict) -> Optional[int]:
+    """
+    How late the train is expected to reach its DESTINATION, from the last
+    entry of the route.
+
+    `delayMinutes` above is a different quantity: how late the train is at the
+    station it has currently reached. Those agree only when we read a train
+    near the end of its run, which is the normal case -- but not the one that
+    matters. 12584 was recorded at 58 and 59 minutes on two polls while the
+    same payloads projected it into Lucknow 64 and 72 minutes late; it was
+    still losing time ahead of us. Every page on the site says "arrived late
+    by", so this is the number they mean.
+
+    While the train is running this is RailRadar's projection, not an
+    observation, and it moves. Once `status` is 'completed' it is the actual
+    arrival. The stored status is what tells the two apart, so both are kept.
+    """
+    route = data.get("route") or []
+    if not route:
+        return None
+    val = _first(route[-1], "delayArrival")
+    try:
+        return int(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_current_location(data: dict) -> tuple[Optional[str], Optional[str]]:
     loc = _first(data, "currentLocation", default={}) or {}
     station_code = _first(loc, "stationCode", "code")
@@ -153,6 +180,7 @@ def poll_train(client: RailRadarClient, train_number: str) -> bool:
     name = _extract_name(data)
     status = _extract_status(data)
     delay_minutes = _extract_delay_minutes(data)
+    arrival_delay_minutes = _extract_arrival_delay(data)
     station_code, loc_status = _extract_current_location(data)
     last_updated_at = _extract_last_updated_at(data)
     dest_code, sched_arrival = _extract_destination(data)
@@ -169,6 +197,7 @@ def poll_train(client: RailRadarClient, train_number: str) -> bool:
         train_number=train_number,
         status=status,
         delay_minutes=delay_minutes,
+        arrival_delay_minutes=arrival_delay_minutes,
         current_station_code=station_code,
         current_station_status=loc_status,
         railradar_last_updated_at=last_updated_at,
@@ -181,9 +210,9 @@ def poll_train(client: RailRadarClient, train_number: str) -> bool:
     # legitimately carry a later run's departure date. Without this in the log
     # that substitution is invisible.
     logger.info(
-        "Polled %s (%s): journey=%s status=%s delay=%smin at %s",
+        "Polled %s (%s): journey=%s status=%s delay=%smin (arrival %smin) at %s",
         train_number, name or "?", _extract_start_date(data) or "?",
-        status, delay_minutes, station_code,
+        status, delay_minutes, arrival_delay_minutes, station_code,
     )
     return True
 

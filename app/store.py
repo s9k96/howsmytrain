@@ -85,6 +85,15 @@ def upsert_train(
     _check(resp, "upsert_train")
 
 
+# polls.arrival_delay_minutes ships in supabase/schema.sql, which is applied by
+# hand -- PostgREST cannot run DDL. Between deploying this code and running that
+# SQL, PostgREST rejects the whole insert over the unknown column, which would
+# throw away the reading rather than degrade. So the first rejection drops the
+# field for the rest of the process and the poll still lands. Flips back on the
+# next run, which is the run after the SQL is applied.
+_HAS_ARRIVAL_COLUMN = True
+
+
 def insert_poll(
     *,
     train_number: str,
@@ -95,6 +104,7 @@ def insert_poll(
     railradar_last_updated_at: Optional[str],
     raw: dict,
     journey_date: Optional[str] = None,
+    arrival_delay_minutes: Optional[int] = None,
 ) -> None:
     if not enabled():
         db.insert_poll(
@@ -106,25 +116,34 @@ def insert_poll(
             railradar_last_updated_at=railradar_last_updated_at,
             raw=raw,
             journey_date=journey_date,
+            arrival_delay_minutes=arrival_delay_minutes,
         )
         return
 
+    global _HAS_ARRIVAL_COLUMN
     # raw is deliberately dropped here -- see supabase/schema.sql.
-    resp = httpx.post(
-        _url("polls"),
-        headers=_headers(),
-        json=[{
-            "train_number": train_number,
-            "journey_date": journey_date or db.today_ist(),
-            "polled_at": db.now_ist_iso(),
-            "status": status,
-            "delay_minutes": delay_minutes,
-            "current_station_code": current_station_code,
-            "current_station_status": current_station_status,
-            "railradar_last_updated_at": railradar_last_updated_at,
-        }],
-        timeout=TIMEOUT,
-    )
+    row = {
+        "train_number": train_number,
+        "journey_date": journey_date or db.today_ist(),
+        "polled_at": db.now_ist_iso(),
+        "status": status,
+        "delay_minutes": delay_minutes,
+        "current_station_code": current_station_code,
+        "current_station_status": current_station_status,
+        "railradar_last_updated_at": railradar_last_updated_at,
+    }
+    if _HAS_ARRIVAL_COLUMN:
+        row["arrival_delay_minutes"] = arrival_delay_minutes
+
+    resp = httpx.post(_url("polls"), headers=_headers(), json=[row], timeout=TIMEOUT)
+    if resp.status_code >= 400 and "arrival_delay_minutes" in resp.text:
+        logger.warning(
+            "polls.arrival_delay_minutes is missing -- run supabase/schema.sql. "
+            "Storing this poll without the arrival delay."
+        )
+        _HAS_ARRIVAL_COLUMN = False
+        row.pop("arrival_delay_minutes", None)
+        resp = httpx.post(_url("polls"), headers=_headers(), json=[row], timeout=TIMEOUT)
     _check(resp, "insert_poll")
 
 
@@ -174,15 +193,23 @@ def last_readings(since_date: str) -> dict[str, dict]:
         {"at": datetime,            # most recent polled_at
          "delay_minutes": int|None, # from that same poll
          "status": str|None,        # from that same poll
-         "times": [datetime, ...]}  # every poll since since_date
+         "times": [datetime, ...],  # every poll since since_date
+         "journeys": {journey_date: {at, status, delay_minutes,
+                                     arrival_delay_minutes}}}
 
     `at` is what dedup keys on. `delay_minutes` and `status` are what let the
     window follow a late train to where it will actually arrive rather than
     closing 90 minutes after a scheduled time it was never going to make.
     `times` is only there so a train that keeps slipping can be capped.
 
-    Dedup is keyed on *when a train was last read*, never on which journey the
-    reading turned out to belong to.
+    `journeys` exists because a follow-up poll can come back describing a
+    different run than the one it was sent after -- 15274's follow-up on
+    2026-08-07 returned the next day's departure, 21 h from its own arrival.
+    Keyed by run, the poller can tell "we looked again and still haven't seen
+    that journey end" from "we saw it end".
+
+    Ordinary dedup is still keyed on *when a train was last read*, never on
+    which journey the reading turned out to belong to.
 
     Predicting the journey is what this replaces, and the prediction could not
     be made correct. `poll_due` derived the expected journey_date as
@@ -198,28 +225,39 @@ def last_readings(since_date: str) -> dict[str, dict]:
     both sides of it are poll times we control. Twelve of the fleet's services
     run longer than 24 h, so this is the common case, not an edge one.
     """
-    def _add(out: dict, number: str, at: datetime, delay, status) -> None:
-        e = out.setdefault(number, {"at": at, "delay_minutes": delay,
-                                    "status": status, "times": []})
+    def _add(out: dict, row: dict) -> None:
+        number = row["train_number"]
+        at = datetime.fromisoformat(row["polled_at"])
+        reading = {
+            "at": at,
+            "status": row.get("status"),
+            "delay_minutes": row.get("delay_minutes"),
+            # Absent until supabase/schema.sql has been run, hence .get().
+            "arrival_delay_minutes": row.get("arrival_delay_minutes"),
+        }
+        e = out.setdefault(number, {**reading, "times": [], "journeys": {}})
         e["times"].append(at)
         if at >= e["at"]:
-            e.update(at=at, delay_minutes=delay, status=status)
+            e.update(reading)
+        jd = str(row.get("journey_date") or "")[:10]
+        if jd and (jd not in e["journeys"] or at >= e["journeys"][jd]["at"]):
+            e["journeys"][jd] = reading
 
     out: dict[str, dict] = {}
     if not enabled():
         for r in db.list_polls(since_date=since_date, limit=5000):
-            _add(out, r["train_number"], datetime.fromisoformat(r["polled_at"]),
-                 r["delay_minutes"], r["status"])
+            _add(out, dict(r))
         return out
 
+    # select=* rather than a column list: this has to keep working on a project
+    # where arrival_delay_minutes hasn't been added yet, and naming a column
+    # PostgREST doesn't know fails the whole request.
     resp = httpx.get(
-        _url(f"polls?select=train_number,polled_at,delay_minutes,status"
-             f"&polled_at=gte.{since_date}&order=polled_at.desc&limit=5000"),
+        _url(f"polls?select=*&polled_at=gte.{since_date}&order=polled_at.desc&limit=5000"),
         headers=_headers(),
         timeout=TIMEOUT,
     )
     _check(resp, "last_readings")
     for r in resp.json():   # newest first, so the first hit per train wins
-        _add(out, r["train_number"], datetime.fromisoformat(r["polled_at"]),
-             r["delay_minutes"], r["status"])
+        _add(out, r)
     return out

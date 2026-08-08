@@ -45,6 +45,24 @@ MAX_SHIFT = 12 * 60
 # train that slips repeatedly cannot eat the 50/day budget on its own.
 MAX_POLLS_PER_DAY = 3
 
+# How many polls a follow-up may spend on one late run before giving up.
+#
+# A follow-up can come back describing a *different* departure: for a service
+# with two runs in the air the endpoint picks, and it does not pick again in
+# our favour fifteen minutes later. Asking again is therefore speculative, and
+# replayed over 2026-08-01..07 it costs more than the budget has:
+#
+#     old code                  34.6/day  peak 38
+#     1 attempt (this)          37.4/day  peak 44
+#     2 attempts                40.1/day  peak 51   <- over the 50/day cap
+#
+# and the extra spend landed on 12615, 12423 and 15274 -- precisely the trains
+# whose arriving run the endpoint never returns, so it buys nothing. One
+# attempt still fixes the case that motivated the guard: a substitution seen
+# *before* the shifted window opens no longer cancels the chase, which is where
+# the +2.8/day goes.
+MAX_CHASE_ATTEMPTS = 1
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -107,6 +125,48 @@ def _window(arrival: str, now: datetime, shift: int = 0):
     return None
 
 
+def _reading_delay(reading: dict) -> int | None:
+    """
+    How late this reading says the train will be AT ITS DESTINATION.
+
+    RailRadar's projected arrival delay when we have it, otherwise the delay
+    where the train was last seen. The two differ by however much time the
+    train is still going to lose, which for a follow-up is exactly the part
+    that matters: shifting by the position delay re-aims at where the train
+    already was, shifting by the arrival delay re-aims at where it is going.
+    """
+    arrival = reading.get("arrival_delay_minutes")
+    return arrival if arrival is not None else reading.get("delay_minutes")
+
+
+def _late_run(seen: dict | None) -> tuple[str, int] | None:
+    """
+    (journey_date, delay) of a run we are still chasing, or None.
+
+    A run qualifies when its most recent reading has it still running and
+    later than the plain window can reach -- AFTER is 90 minutes, so anything
+    under that arrives while the original window is open and a second request
+    buys nothing.
+
+    Keyed by run rather than by train because the answer to a follow-up is not
+    guaranteed to be about the run we asked after: for a service with two runs
+    in the air, the endpoint may return the newer one. Reading the newest
+    poll alone, that substitution looks like the late train having recovered.
+    """
+    if not seen:
+        return None
+    best = None
+    for journey_date, reading in seen.get("journeys", {}).items():
+        if reading["status"] != "running":
+            continue
+        delay = _reading_delay(reading)
+        if not delay or delay <= AFTER.total_seconds() / 60:
+            continue
+        if best is None or reading["at"] > best[2]:
+            best = (journey_date, delay, reading["at"])
+    return (best[0], best[1]) if best else None
+
+
 def _due_now(trains: list[dict], now: datetime, last: dict[str, dict]) -> list[str]:
     """
     Train numbers whose arrival window contains now and which we have not
@@ -150,13 +210,12 @@ def _due_now(trains: list[dict], now: datetime, last: dict[str, dict]) -> list[s
         # request. AFTER is 90 minutes, so a train an hour down is covered by
         # the original window and shifting for it buys nothing while costing a
         # call: shifting on *any* delay measured out at 42 requests/day against
-        # a 50/day cap, with a peak of 49. Thresholding here puts it back to 32.
-        shift = 0
-        delay = seen["delay_minutes"] if seen else None
-        if seen and seen["status"] == "running" and delay and delay > AFTER.total_seconds() / 60:
-            shift = min(delay, MAX_SHIFT)
+        # a 50/day cap, with a peak of 49. Thresholding puts it back to 32.
+        chase = _late_run(seen)
+        shift = min(chase[1], MAX_SHIFT) if chase else 0
 
         window = _window(arrival, now, shift)
+        following = shift > 0 and window is not None
         # A shifted window can leave the unshifted one still open (the train is
         # late but not yet past its scheduled slot). Either is a fair moment to
         # read it, so fall back rather than going quiet in between.
@@ -165,7 +224,19 @@ def _due_now(trains: list[dict], now: datetime, last: dict[str, dict]) -> list[s
         if window is None:
             continue
         start, _end = window
-        if at is not None and at >= start:
+
+        if following:
+            # Only a reading OF THAT RUN closes the follow-up. A poll that came
+            # back describing a different departure answered a different
+            # question, and treating it as the answer would quietly drop the
+            # late run. Worth one more ask -- but only one, because the endpoint
+            # substituting once usually means it has moved on for good.
+            answered = seen["journeys"].get(chase[0])
+            if answered and answered["at"] >= start:
+                continue
+            if sum(1 for x in seen["times"] if x >= start) >= MAX_CHASE_ATTEMPTS:
+                continue
+        elif at is not None and at >= start:
             continue
         due.append(number)
     return due

@@ -95,6 +95,9 @@
         One row per API call, including the <code>not-started</code> readings
         that <em>Every recorded journey</em> above leaves out — those are polls
         that caught no live run, so they carry no usable delay.
+        <em>Delay at arrival</em> is the figure the rest of this page uses; while
+        a train is still running it is a projection, and <em>delay there</em> is
+        what was actually observed, at the station in the column before it.
       </p>
       <div class="table-scroll" id="polls-table"></div>
     </div>
@@ -359,17 +362,24 @@ function renderPolls(rows) {
     c.innerHTML = `<div class="empty-state">No polls recorded for this train yet.</div>`;
     return;
   }
+  // Two delays per poll, and they answer different questions: how late the
+  // train will reach its destination, and how late it was at the station it
+  // had got to. The tables above report the first, so this one leads with it
+  // and keeps the second beside it rather than showing a number that silently
+  // disagrees with the rest of the page.
+  const arrivalOf = (r) => r.arrival_delay_minutes ?? r.delay_minutes;
   c.innerHTML = `
     <table class="tabular">
       <thead><tr><th>Polled at</th><th>Journey date</th><th>Status</th>
-        <th>Delay</th><th>Last seen</th></tr></thead>
+        <th>Delay at arrival</th><th>Where seen</th><th>Delay there</th></tr></thead>
       <tbody>${rows.map(r => `
         <tr>
           <td>${new Date(r.polled_at).toLocaleString()}</td>
           <td>${esc(r.journey_date)}</td>
           <td>${esc(r.status ?? "–")}</td>
-          <td class="${delayClass(r.delay_minutes)}">${fmt(r.delay_minutes)}</td>
+          <td class="${delayClass(arrivalOf(r))}">${fmt(arrivalOf(r))}</td>
           <td>${esc(r.current_station_code ?? "–")}</td>
+          <td class="dim">${fmt(r.delay_minutes)}</td>
         </tr>`).join("")}</tbody>
     </table>`;
 }

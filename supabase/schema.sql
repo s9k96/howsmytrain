@@ -39,6 +39,16 @@ create table if not exists polls (
     railradar_last_updated_at timestamptz
 );
 
+-- How late the train is projected to reach its DESTINATION, from the last
+-- entry of the payload's route. `delay_minutes` beside it is a different
+-- quantity: how late it was at the station it had reached when we looked.
+-- Those agree only for a train read near the end of its run. 12584 was stored
+-- at 58 and 59 minutes while the same payloads projected it into Lucknow 64
+-- and 72 minutes late. Both are kept -- the old one is a fact we observed, and
+-- overwriting history with a differently-defined number would be worse than
+-- the gap it fills.
+alter table polls add column if not exists arrival_delay_minutes integer;
+
 create index if not exists idx_polls_train_date on polls (train_number, journey_date);
 create index if not exists idx_polls_polled_at  on polls (polled_at desc);
 
@@ -107,22 +117,34 @@ create index if not exists idx_poller_runs_ran_at on poller_runs (ran_at desc);
 -- `is distinct from` rather than `not in`: null statuses must survive, and
 -- `status not in (...)` evaluates to null -- i.e. drops the row -- when
 -- status is null.
+--
+-- `delay_minutes` here is the arrival delay when the poll carried one, falling
+-- back to the position delay. Every page says "arrived late by", so this is
+-- the number they meant all along; rows predating the column keep the only one
+-- they ever had. The raw pair is exposed at the end for anyone checking.
+-- Appended, not inserted: CREATE OR REPLACE VIEW can only add columns at the
+-- end, and reordering fails with 42P16.
 create or replace view daily_delays
 with (security_invoker = on) as
 select distinct on (p.train_number, p.journey_date)
     p.train_number,
     t.name,
     p.journey_date,
-    p.delay_minutes,
+    coalesce(p.arrival_delay_minutes, p.delay_minutes) as delay_minutes,
     p.status,
     p.current_station_code,
     p.polled_at,
-    (p.delay_minutes is not null and p.delay_minutes <= 10) as on_time
+    (coalesce(p.arrival_delay_minutes, p.delay_minutes) is not null
+     and coalesce(p.arrival_delay_minutes, p.delay_minutes) <= 10) as on_time,
+    p.delay_minutes            as position_delay_minutes,
+    p.arrival_delay_minutes
 from polls p
 join trains t using (train_number)
 where p.status is distinct from 'not-started'
   and p.status is distinct from 'cancelled'
-order by p.train_number, p.journey_date, (p.delay_minutes is null), p.polled_at desc;
+order by p.train_number, p.journey_date,
+         (coalesce(p.arrival_delay_minutes, p.delay_minutes) is null),
+         p.polled_at desc;
 
 -- Weekly rollup. Mirrors app/aggregate.py:weekly_stats.
 create or replace view weekly_stats
