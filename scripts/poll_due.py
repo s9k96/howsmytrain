@@ -284,8 +284,10 @@ def main() -> int:
     logging.info("Due now (%s): %s", now.strftime("%H:%M IST"), ", ".join(due))
     config.require_api_key()
     results = poll_all(due)
-    store.record_run(len(due), len(results["ok"]), len(results["failed"]))
-    logging.info("Done. ok=%s failed=%s", results["ok"], results["failed"])
+    store.record_run(len(due), len(results["ok"]), len(results["failed"]),
+                     failure_reason=results["reason"])
+    logging.info("Done. ok=%s failed=%s reason=%s",
+                 results["ok"], results["failed"], results["reason"])
     return 0 if not results["failed"] else 1
 
 

@@ -439,10 +439,21 @@ function sortRows(list, key = sortKey, dir = sortDir) {
 
 const pct = (v, digits = 0) => (v === null ? "—" : `${v.toFixed(digits)}%`);
 
+/**
+ * A delay as +H:MM, always.
+ *
+ * common.js's fmtDelay() switches representation at the hour -- "+42" then
+ * "+2:51" -- which reads well for a single figure but badly down a column:
+ * "+42" and "+2:51" sit under one heading in different units, and a glance
+ * ranks them wrongly. One shape per column means the magnitudes line up.
+ */
+const fmtClock = (m) =>
+  (m <= 0 ? "ON TIME" : `+${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`);
+
 /** Delay figures wear the scale; a null wears nothing rather than a colour. */
 function delayNum(v) {
   if (v === null) return '<span class="dim">—</span>';
-  return `<span style="color:${scaleOf(v)};font-weight:600">${fmtDelay(Math.round(v))}</span>`;
+  return `<span style="color:${scaleOf(v)};font-weight:600">${fmtClock(Math.round(v))}</span>`;
 }
 
 function renderClasses(list) {

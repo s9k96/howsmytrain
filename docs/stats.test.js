@@ -38,6 +38,7 @@ vm.runInContext(inline[1], ctx);
 const { build, sortRows, median, binOf, byClass, nearArrival } = ctx;
 const COLS = vm.runInContext("COLS", ctx);
 const SHARE_BINS = vm.runInContext("SHARE_BINS", ctx);
+const fmtClock = vm.runInContext("fmtClock", ctx);
 
 // ---- median ---------------------------------------------------------------
 assert.strictEqual(median([]), null);
@@ -269,5 +270,18 @@ const measured = byClass(build([raj], [
 assert.strictEqual(measured.runs, 2);
 assert.strictEqual(measured.measured, 50);
 
-console.log(`stats: 71 build/median/sort/threshold/band/class assertions pass `
+// ---- fmtClock ------------------------------------------------------------
+// One shape per column. common.js's fmtDelay switches units at the hour, so a
+// column mixes "+42" with "+2:51" and the eye ranks them wrongly.
+assert.strictEqual(fmtClock(16), "+0:16");
+assert.strictEqual(fmtClock(59), "+0:59");
+assert.strictEqual(fmtClock(60), "+1:00");
+assert.strictEqual(fmtClock(65), "+1:05", "minutes are always two digits");
+assert.strictEqual(fmtClock(108), "+1:48");
+assert.strictEqual(fmtClock(630), "+10:30", "hours are not padded -- they can exceed two digits");
+// Zero is a reading, not a missing value, and says so in words.
+assert.strictEqual(fmtClock(0), "ON TIME");
+assert.strictEqual(fmtClock(-3), "ON TIME", "an early arrival is not '-0:03' late");
+
+console.log(`stats: 80 build/median/sort/threshold/band/class assertions pass `
   + `across ${COLS.length} columns, ${SHARE_BINS.length} bands and ${classes.length} classes`);

@@ -12,7 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.poller import _extract_arrival_delay, _extract_start_date
+from app.poller import _extract_arrival_delay, _extract_start_date, _reason
+from app.railradar import RailRadarError, RailRadarRateLimitError
 
 
 def test_start_date_is_taken_verbatim():
@@ -64,3 +65,25 @@ def test_a_payload_without_a_usable_route_yields_nothing():
     assert _extract_arrival_delay({"route": []}) is None
     assert _extract_arrival_delay({"route": [{"stationCode": "LJN"}]}) is None
     assert _extract_arrival_delay({"route": [{"delayArrival": "late"}]}) is None
+
+
+# ---- why a poll failed ----------------------------------------------------
+# Recorded on the run so a burst is diagnosable afterwards. Twice a block of
+# runs has failed for hours and the heartbeat could say only how many polls
+# were lost -- never whether it was a quota, a server error or the network,
+# which is the one thing that decides what to do about it.
+
+def test_a_quota_rejection_is_named_as_one():
+    assert _reason(RailRadarRateLimitError("limit", status_code=429)) == "rate-limited"
+
+
+def test_a_server_error_keeps_its_status():
+    assert _reason(RailRadarError("boom", status_code=503)) == "http-503"
+    assert _reason(RailRadarError("gone", status_code=404)) == "http-404"
+
+
+def test_a_failure_with_no_response_is_the_network():
+    # httpx.RequestError never reaches a status code -- a DNS failure, a
+    # refused connection or a timeout all land here, and none of them are
+    # RailRadar saying no.
+    assert _reason(RailRadarError("Network error calling RailRadar: timeout")) == "network"

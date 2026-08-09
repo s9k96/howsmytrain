@@ -152,9 +152,14 @@ def insert_poll(
     }, "insert_poll", optional=("arrival_delay_minutes",))
 
 
-def record_run(due_count: int, ok_count: int, failed_count: int) -> None:
+def record_run(due_count: int, ok_count: int, failed_count: int,
+               failure_reason: Optional[str] = None) -> None:
     """
     Heartbeat for one workflow execution -- written even when nothing was due.
+
+    `failure_reason` is what turns a block of failed runs from "something broke"
+    into something actionable: a quota, a server error and a dropped connection
+    need three different responses, and counts alone distinguish none of them.
 
     Best-effort: a failed heartbeat must never fail the run that collected
     real data, so this logs and swallows.
@@ -162,18 +167,13 @@ def record_run(due_count: int, ok_count: int, failed_count: int) -> None:
     if not enabled():
         return
     try:
-        resp = httpx.post(
-            _url("poller_runs"),
-            headers=_headers(),
-            json=[{
-                "ran_at": db.now_ist_iso(),
-                "due_count": due_count,
-                "ok_count": ok_count,
-                "failed_count": failed_count,
-            }],
-            timeout=TIMEOUT,
-        )
-        _check(resp, "record_run")
+        _post_row("poller_runs", {
+            "ran_at": db.now_ist_iso(),
+            "due_count": due_count,
+            "ok_count": ok_count,
+            "failed_count": failed_count,
+            "failure_reason": failure_reason,
+        }, "record_run", optional=("failure_reason",))
     except Exception as exc:  # noqa: BLE001 -- heartbeat is never worth failing on
         logger.warning("Could not record poller run: %s", exc)
 

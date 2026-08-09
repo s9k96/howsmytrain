@@ -11,6 +11,7 @@ being picked up, check `raw_json` in the `polls` table and adjust the
 """
 import logging
 import time
+from collections import Counter
 from datetime import datetime
 from typing import Optional
 
@@ -177,20 +178,37 @@ def _extract_destination(data: dict) -> tuple[Optional[str], Optional[str]]:
     return code, _time_of(_first(last, "scheduledArrival", "scheduledDeparture"))
 
 
-def poll_train(client: RailRadarClient, train_number: str) -> bool:
+def _reason(exc: RailRadarError) -> str:
     """
-    Poll a single train and store the snapshot. Returns True on success,
-    False if the poll failed (logged, not raised) so a caller polling
-    multiple trains can continue with the rest.
+    A short, groupable label for why a poll failed.
+
+    Recorded on the run so a burst of failures is diagnosable after the fact.
+    Twice now a block of runs has failed for hours and the heartbeat could only
+    say how many polls were lost, never whether it was a quota, a server error
+    or the network -- which is the one thing that decides what to do about it.
+    """
+    if isinstance(exc, RailRadarRateLimitError):
+        return "rate-limited"
+    if exc.status_code:
+        return f"http-{exc.status_code}"
+    return "network"
+
+
+def poll_train(client: RailRadarClient, train_number: str) -> Optional[str]:
+    """
+    Poll a single train and store the snapshot.
+
+    Returns None on success, or a short reason string if the poll failed
+    (logged, not raised) so a caller polling multiple trains can continue.
     """
     try:
         data = client.get_live_status(train_number)
     except RailRadarRateLimitError as exc:
         logger.warning("Rate limited polling train %s: %s", train_number, exc)
-        return False
+        return _reason(exc)
     except RailRadarError as exc:
         logger.error("Failed to poll train %s: %s", train_number, exc)
-        return False
+        return _reason(exc)
 
     name = _extract_name(data)
     status = _extract_status(data)
@@ -230,7 +248,7 @@ def poll_train(client: RailRadarClient, train_number: str) -> bool:
         train_number, name or "?", _extract_start_date(data) or "?",
         status, delay_minutes, arrival_delay_minutes, station_code,
     )
-    return True
+    return None
 
 
 # RailRadar's free tier allows 10 requests/minute. Arrival times cluster hard
@@ -243,12 +261,26 @@ SECONDS_BETWEEN_CALLS = 7.0
 
 
 def poll_all(train_numbers: list[str]) -> dict:
-    """Poll every configured train once. Returns a summary dict."""
+    """
+    Poll every configured train once.
+
+    Returns {"ok": [...], "failed": [...], "reason": str|None} -- the reason
+    being the one shared by most of the failures, which is what a run-level
+    heartbeat can carry. A run that fails for two different causes is not a
+    thing worth modelling; the log line has the detail per train.
+    """
     client = RailRadarClient()
-    results = {"ok": [], "failed": []}
+    results = {"ok": [], "failed": [], "reason": None}
+    reasons: list[str] = []
     for i, train_number in enumerate(train_numbers):
         if i:  # no delay before the first call -- the common case is 1-2 trains
             time.sleep(SECONDS_BETWEEN_CALLS)
-        ok = poll_train(client, train_number)
-        (results["ok"] if ok else results["failed"]).append(train_number)
+        reason = poll_train(client, train_number)
+        if reason is None:
+            results["ok"].append(train_number)
+        else:
+            results["failed"].append(train_number)
+            reasons.append(reason)
+    if reasons:
+        results["reason"] = Counter(reasons).most_common(1)[0][0]
     return results

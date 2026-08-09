@@ -93,6 +93,13 @@ create table if not exists poller_runs (
     failed_count integer not null default 0
 );
 
+-- Why the polls in this run failed: 'rate-limited', 'http-503', 'network'.
+-- Null when nothing failed, and null on every row written before this column
+-- existed. Counts alone could not tell a quota from a server error from a
+-- dropped connection, which is exactly the question a burst of failures raises
+-- -- twice now, and both times the answer had to be inferred from timing.
+alter table poller_runs add column if not exists failure_reason text;
+
 create index if not exists idx_poller_runs_ran_at on poller_runs (ran_at desc);
 
 -- One row per (train, journey_date): the last poll of that journey that

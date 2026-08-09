@@ -43,6 +43,30 @@
   .load-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 9px; }
   .load-cap { font: 400 10px/1.2 var(--mono); letter-spacing: 0.08em; color: var(--text-3); }
 
+  /* ---- Outages -----------------------------------------------------------
+     The log answers "what happened last night", the histogram answers "does
+     it keep happening at the same time" -- neither alone was enough to spot
+     that every failure on record lands between 23:00 and 02:00. */
+  .outages { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 34px; align-items: start; }
+
+  /* A clock, not a bar chart: the failures cluster across midnight, and a
+     linear axis tears that one cluster into two edges. 00 at the top,
+     clockwise. Spoke length is failures in that hour. */
+  .hourdial { display: block; width: 100%; max-width: 250px; margin: 4px auto 0; }
+  .hourdial .ring { fill: none; stroke: var(--hairline); }
+  .hourdial line { stroke-width: 9; }
+  .hourdial line.track { stroke: var(--track); }
+  .hourdial line.v { stroke: var(--severe); }
+  .hourdial text { fill: var(--text-3); font: 400 9px var(--mono); }
+  .hourdial .hub { fill: var(--text-2); font-size: 13px; letter-spacing: 0.04em; }
+  .hourdial .hubcap { font-size: 7.5px; letter-spacing: 0.14em; }
+
+  .outage-older { margin: 14px 0 0; }
+
+  @media (max-width: 900px) {
+    .outages { grid-template-columns: minmax(0, 1fr); gap: 26px; }
+  }
+
   /* styles.css drops .week.days to gap:5px here. This row is .week.loadbars,
      so it keeps the base 10px unless told otherwise -- and the day labels
      would then sit out of line with the bars they belong to. */
@@ -89,6 +113,24 @@
     </div>
 
     <div class="card">
+      <div class="card-head"><h2>Outages</h2></div>
+      <p class="waiting-note">
+        Two different failures, and they need different reactions.
+        <b>Polls failing</b> means the workflow ran and RailRadar refused every
+        request in it. <b>Scheduler silent</b> means no run happened at all —
+        the external cron or GitHub's queue, not the API. A window missed
+        entirely is a journey we can never go back for, which is the column
+        that matters. The list covers the last <b><span id="recent-days"></span>
+        days</b>; the dial reads all <b><span id="hist-days"></span></b>, because
+        a time-of-day pattern needs every failure it can get.
+      </p>
+      <div class="outages">
+        <div class="table-scroll" id="incidents"></div>
+        <div id="byhour"></div>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-head"><h2>Trains needing attention</h2></div>
       <div class="table-scroll" id="attention"></div>
     </div>
@@ -98,8 +140,137 @@
 </div>
 
 <script>
+// How far back the page fetches. The outage log needs the longer view -- an
+// incident a fortnight ago is still worth seeing, and gaps are found between
+// consecutive heartbeats, so a short window would invent one at the cut.
 const DAYS_BACK = 14;
+
+// What the lists show. "Is collection working now" is a week's question, and a
+// fortnight of rows answered it at twice the length. The charts still read the
+// full DAYS_BACK: a distribution wants every observation it can get, and the
+// time-of-day pattern only became visible with two weeks of failures in it.
+const RECENT_DAYS = 7;
 const WINDOW_AFTER_MIN = 90;   // matches AFTER in scripts/poll_due.py
+const WINDOW_BEFORE_MIN = 10;  // matches BEFORE
+
+// Dial geometry, in viewBox units: centre, inner radius, outer radius.
+const DIAL_C = 110, DIAL_R0 = 46, DIAL_R1 = 94;
+
+// The poller is triggered every 15 min, so a longer silence than this means a
+// run was skipped rather than merely late. Also the tolerance for stitching
+// consecutive failures into one incident: two failed runs 20 min apart are one
+// outage, not two, and a list that says otherwise buries the real story.
+const INCIDENT_GAP_MIN = 30;
+
+/**
+ * Group the heartbeat into outages, of two kinds that need different fixes.
+ *
+ *   polls-failing    the run happened and every poll in it was refused
+ *   scheduler-silent no heartbeat at all for longer than INCIDENT_GAP_MIN
+ *
+ * A run with nothing due is not evidence of anything -- most runs find nothing
+ * due -- so only runs that actually tried and got nowhere count as failing.
+ *
+ * `runs` comes in newest-first (that is how the page fetches it); this reads
+ * oldest-first so adjacency is chronological, and returns newest-first again.
+ */
+function findIncidents(runs, now = new Date()) {
+  const ts = [...runs]
+    .map(r => ({ ...r, at: new Date(r.ran_at) }))
+    .sort((a, b) => a.at - b.at);
+  const out = [];
+  let open = null;
+
+  for (const r of ts) {
+    // A poll that got through ends whatever was open: that is recovery, not a
+    // lull. Only idle runs -- nothing due, so no evidence either way -- are
+    // bridged, which is what the tolerance is for. Without this an outage
+    // merges across its own recovery and reads as one long failure.
+    if (r.ok_count > 0) {
+      if (open) { out.push(open); open = null; }
+      continue;
+    }
+    const failing = r.due_count > 0;
+    if (failing) {
+      if (open && (r.at - open.end) / 6e4 <= INCIDENT_GAP_MIN) {
+        open.end = r.at;
+        open.runs += 1;
+        open.polls += r.failed_count;
+        if (r.failure_reason) open.reasons.add(r.failure_reason);
+      } else {
+        if (open) out.push(open);
+        open = { kind: "polls failing", start: r.at, end: r.at, runs: 1,
+                 polls: r.failed_count, reasons: new Set(r.failure_reason ? [r.failure_reason] : []) };
+      }
+    }
+  }
+  if (open) out.push(open);
+
+  // Silences are found between consecutive heartbeats rather than inside the
+  // loop above: a gap is the absence of a run, so no row carries it.
+  for (let i = 1; i < ts.length; i++) {
+    const gap = (ts[i].at - ts[i - 1].at) / 6e4;
+    if (gap > INCIDENT_GAP_MIN) {
+      out.push({ kind: "scheduler silent", start: ts[i - 1].at, end: ts[i].at,
+                 runs: 0, polls: 0, reasons: new Set() });
+    }
+  }
+  // Still quiet right now counts too, or the one outage you most want to see
+  // is the one that never appears.
+  if (ts.length && (now - ts[ts.length - 1].at) / 6e4 > INCIDENT_GAP_MIN) {
+    out.push({ kind: "scheduler silent", start: ts[ts.length - 1].at, end: now,
+               runs: 0, polls: 0, ongoing: true, reasons: new Set() });
+  }
+  return out.sort((a, b) => b.start - a.start);
+}
+
+/**
+ * Journeys whose whole polling window fell inside an outage.
+ *
+ * The honest cost. Failed polls get retried on the next tick, so a burst that
+ * happens to miss every arrival costs nothing; one that swallows a window
+ * costs that journey permanently, because RailRadar only serves current runs.
+ */
+function missedIn(incident, trains, runs) {
+  // The test is "did any poll get through while this window was open", not
+  // "does the window sit inside the incident's timestamps". Containment looks
+  // equivalent and isn't: a heartbeat is stamped to the second, so 22469's
+  // window opening at 23:00:00 fell outside an outage whose first failing run
+  // is stamped 23:00:47, and a lost journey went unreported over 47 seconds.
+  // Asking about successes needs no boundary arithmetic at all.
+  const successes = runs.filter(r => r.ok_count > 0).map(r => +new Date(r.ran_at));
+  let missed = 0;
+
+  for (const t of trains) {
+    const arr = minutesOfDay(t.scheduled_arrival);
+    if (arr === null) continue;
+    // From the day before to the day after: a window can open on one date and
+    // shut on the next, and a long silence spans several.
+    const from = new Date(incident.start);
+    from.setHours(0, 0, 0, 0);
+    from.setDate(from.getDate() - 1);
+    for (let d = from; +d <= +incident.end + 864e5; d.setDate(d.getDate() + 1)) {
+      const day = new Date(d);
+      if (!arrivesOn(t, day)) continue;
+      const open = day.getTime() + (arr - WINDOW_BEFORE_MIN) * 6e4;
+      const shut = day.getTime() + (arr + WINDOW_AFTER_MIN) * 6e4;
+      if (shut < +incident.start || open > +incident.end) continue;  // untouched
+      if (!successes.some(s => s >= open && s <= shut)) missed += 1;
+    }
+  }
+  return missed;
+}
+
+/** Failed polls per hour of the day, over whatever window is loaded. */
+function failuresByHour(runs) {
+  const hours = Array.from({ length: 24 }, () => ({ failed: 0, attempts: 0 }));
+  for (const r of runs) {
+    const h = new Date(r.ran_at).getHours();
+    hours[h].failed += r.failed_count;
+    hours[h].attempts += r.ok_count + r.failed_count;
+  }
+  return hours;
+}
 
 function minutesOfDay(t) {
   if (!t) return null;
@@ -133,6 +304,106 @@ const API_CAP = 50;   // RailRadar free tier, see app/railradar.py
  * Friday spends its request on Saturday. Reading the raw array here would put
  * the load on the wrong day for all 21 offset services.
  */
+// A single failed run has no duration -- "0 min" reads as though nothing
+// happened, when what happened is one tick's worth of trains going unread.
+const fmtDur = (mins) =>
+  (mins < 1 ? "one tick"
+            : mins < 60 ? `${Math.round(mins)} min`
+                        : `${Math.floor(mins / 60)}h${String(Math.round(mins % 60)).padStart(2, "0")}`);
+
+function renderOutages(runs, trains, now) {
+  // Grouped over everything loaded, then listed for the recent window only.
+  // Grouping first matters: an incident that began before the cutoff and ran
+  // past it is one outage, and finding incidents in a pre-trimmed series would
+  // split it at the boundary and report the tail as its own event.
+  // The card's own prose states both windows; filled from the constants so a
+  // caption cannot drift away from the numbers it describes.
+  document.getElementById("recent-days").textContent = RECENT_DAYS;
+  document.getElementById("hist-days").textContent = DAYS_BACK;
+
+  const cutoff = now - RECENT_DAYS * 864e5;
+  const all = findIncidents(runs, now);
+  const incidents = all.filter(i => i.end >= cutoff);
+  const older = all.length - incidents.length;
+  const el = document.getElementById("incidents");
+
+  el.innerHTML = !incidents.length
+    ? `<div class="empty-state">No outages in the last ${RECENT_DAYS} days.${
+        older ? ` ${older} before that.` : ""}</div>`
+    : `<table class="tabular">
+        <thead><tr><th>When</th><th>For</th><th>What</th>
+          <th class="num">Polls lost</th><th class="num">Windows missed</th></tr></thead>
+        <tbody>${incidents.map(i => {
+          const mins = (i.end - i.start) / 6e4;
+          const missed = missedIn(i, trains, runs);
+          const why = [...i.reasons].join(", ");
+          return `<tr>
+            <td>${i.start.toLocaleString(undefined, { month: "short", day: "numeric",
+                   hour: "2-digit", minute: "2-digit" })}${i.ongoing ? " <b>· now</b>" : ""}</td>
+            <td>${fmtDur(mins)}</td>
+            <td>${i.kind}${why ? ` <span class="dim">${esc(why)}</span>`
+                   : i.kind === "polls failing" ? ` <span class="dim">reason not recorded</span>` : ""}</td>
+            <td class="num">${i.polls || "—"}</td>
+            <td class="num ${missed ? "bad" : ""}">${missed || "—"}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>${older ? `<p class="waiting-note outage-older">${older} older
+        outage${older === 1 ? "" : "s"} in the ${DAYS_BACK}-day history, still
+        counted in the dial.</p>` : ""}`;
+
+  // Failures by hour, as a 24-hour dial rather than a bar chart.
+  //
+  // The whole finding is that they cluster across midnight -- 23:00, 00:00 and
+  // 01:00 hold every one of them. On a linear axis that single cluster is torn
+  // in half and pinned to opposite ends, which is the one shape the chart
+  // exists to show. A clock face has no ends.
+  const hours = failuresByHour(runs);
+  const worst = Math.max(1, ...hours.map(h => h.failed));
+  const peak = hours.indexOf(hours.reduce((a, b) => (b.failed > a.failed ? b : a)));
+  const total = hours.reduce((a, h) => a + h.failed, 0);
+
+  // 00 at the top, clockwise, like a clock.
+  const polar = (r, hour) => {
+    const a = (hour / 24) * 2 * Math.PI - Math.PI / 2;
+    return [(DIAL_C + r * Math.cos(a)).toFixed(1), (DIAL_C + r * Math.sin(a)).toFixed(1)];
+  };
+  const spoke = (hour, from, to, cls, title) => {
+    const [x1, y1] = polar(from, hour);
+    const [x2, y2] = polar(to, hour);
+    return `<line class="${cls}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"${
+      title ? `><title>${title}</title></line>` : "/>"}`;
+  };
+
+  document.getElementById("byhour").innerHTML = `
+    <div class="load-head">
+      <span class="load-cap">FAILED POLLS BY HOUR</span>
+      <span class="load-cap">${total} OF ${hours.reduce((a, h) => a + h.attempts, 0)}
+        · ${DAYS_BACK}D</span>
+    </div>
+    <svg class="hourdial" viewBox="0 0 ${DIAL_C * 2} ${DIAL_C * 2}" role="img"
+         aria-label="${total} failed polls by hour of day${total ? `, peaking at ${String(peak).padStart(2, "0")}:00` : ""}">
+      <circle class="ring" cx="${DIAL_C}" cy="${DIAL_C}" r="${DIAL_R1}"/>
+      ${/* Every hour gets a full-length faint spoke: it carries the hover
+            target, and an hour with no failures still has to be findable. */""}
+      ${hours.map((h, i) => spoke(i, DIAL_R0, DIAL_R1, "track",
+        `${String(i).padStart(2, "0")}:00 — ${h.failed} of ${h.attempts} attempts failed`)).join("")}
+      ${hours.map((h, i) => (h.failed
+        ? spoke(i, DIAL_R0, DIAL_R0 + (DIAL_R1 - DIAL_R0) * (h.failed / worst), "v bad", "")
+        : "")).join("")}
+      ${[0, 6, 12, 18].map(hr => {
+        const [x, y] = polar(DIAL_R1 + 11, hr);
+        return `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central"
+          >${String(hr).padStart(2, "0")}</text>`;
+      }).join("")}
+      ${total ? `
+        <text x="${DIAL_C}" y="${DIAL_C - 8}" text-anchor="middle" class="hubcap">WORST HOUR</text>
+        <text x="${DIAL_C}" y="${DIAL_C + 10}" text-anchor="middle" class="hub"
+          >${String(peak).padStart(2, "0")}:00</text>`
+      : `<text x="${DIAL_C}" y="${DIAL_C}" text-anchor="middle" dominant-baseline="central"
+           class="hubcap">NO FAILURES</text>`}
+    </svg>`;
+}
+
 function renderLoad(trains, now) {
   // Monday of the current week, so the seven dates line up with the labels.
   const monday = new Date(now);
@@ -181,7 +452,7 @@ function render(trains, polls, runs, now) {
   // drags coverage down to a number that means nothing.
   const trackedFrom = (t) => (t.created_at ? isoDate(new Date(t.created_at)) : "0000-00-00");
   const rows = [];
-  for (let i = 0; i < DAYS_BACK; i++) {
+  for (let i = 0; i < RECENT_DAYS; i++) {
     const d = new Date(now);
     d.setDate(d.getDate() - i);
     const key = isoDate(d);
@@ -219,7 +490,7 @@ function render(trains, polls, runs, now) {
       lastRun ? `${runsToday} runs today · external cron triggers every 15 min`
               : "no heartbeat yet — deploy the updated poller", "--series-1", runTone],
     ["Coverage", covPct === null ? "–" : covPct, covPct === null ? "" : "%",
-      `${totAct} of ${totExp} expected polls`, "--series-3",
+      `${totAct} of ${totExp} expected polls · ${RECENT_DAYS} days`, "--series-3",
       covPct === null ? "" : covPct >= 95 ? "good" : covPct >= 70 ? "warn" : "bad"],
     ["Last train polled", lastPoll ? `${Math.round((now - lastPoll) / 36e5)}` : "–", lastPoll ? "h ago" : "",
       lastPoll ? "gaps here are normal between arrivals" : "nothing recorded", "--series-7", ""],
@@ -281,9 +552,11 @@ function render(trains, polls, runs, now) {
   wireRows(document.getElementById("attention"));
 
   renderLoad(trains, now);
+  renderOutages(runs, trains, now);
 
   document.getElementById("subtitle").textContent =
-    `${trains.length} trains · last ${DAYS_BACK} days · checked ${now.toLocaleTimeString()}`;
+    `${trains.length} trains · coverage ${RECENT_DAYS} days · outages ${DAYS_BACK} · `
+    + `checked ${now.toLocaleTimeString()}`;
 }
 
 async function main() {
@@ -303,10 +576,16 @@ async function main() {
       // poller_runs may not exist yet on an un-migrated project -- the page
       // still works without it, just without the heartbeat.
       //
-      // Newest first and bounded: only the latest heartbeat and today's count
-      // are read, and the poller writes ~96 rows a day. Asking for all 14 days
-      // is what ran into PostgREST's row cap and dropped the newest runs.
-      sb("poller_runs", `select=ran_at,due_count,ok_count,failed_count&ran_at=gte.${isoDate(since)}&order=ran_at.desc&limit=500`)
+      // The whole window now, not the newest 500: the outage log finds
+      // silences between consecutive heartbeats, so a truncated series
+      // invents a gap at the cut. That is ~1350 rows over 14 days, which
+      // sb() pages through. Ordered regardless -- unordered, the rows dropped
+      // at PostgREST's cap would be the newest, which is what once had the
+      // page reporting the scheduler 15 h dead while it was running fine.
+      //
+      // select=* rather than a column list so this keeps working before
+      // failure_reason has been added to the database.
+      sb("poller_runs", `select=*&ran_at=gte.${isoDate(since)}&order=ran_at.desc`)
         .catch(() => []),
     ]);
     render(trains, polls, runs, new Date());

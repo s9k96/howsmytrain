@@ -229,6 +229,28 @@ only number they ever had.
 While a train is running this is RailRadar's projection, not an observation;
 `status` distinguishes them and the train page labels it.
 
+### Outage view on the health page — **SQL still to run**
+Two failure modes, and they had been indistinguishable from the dashboard:
+*polls failing* (the run happened, RailRadar refused everything) and *scheduler
+silent* (no run at all — the external cron or GitHub's queue). The card lists
+incidents with what each cost, beside a 24-hour dial of failures.
+
+- `supabase/schema.sql` — `poller_runs.failure_reason`
+- `app/poller.py` — `_reason()`: `rate-limited` / `http-<code>` / `network`
+- `docs/health.html` — `findIncidents`, `missedIn`, `failuresByHour`, the card
+- `docs/health.test.js` — new, 28 assertions on the grouping
+
+**A dial rather than a bar chart** because every failure on record falls between
+23:00 and 02:00, and a linear axis tears that single cluster across two edges.
+
+Two things the tests caught before they shipped. A *successful* poll between two
+failures now ends the outage (that is recovery); only idle ticks bridge it, and
+without that an outage merged across its own recovery. And "did this journey get
+polled" is asked as *was there a successful run while its window was open*, not
+*is the window inside the incident* — the second is the same thing until it
+isn't: 22469's window opened at 23:00:00 against a first failing run stamped
+23:00:47, and a genuinely lost journey went unreported over 47 seconds.
+
 ### Per-class metrics — **SQL still to run**
 `trains.train_type` holds RailRadar's own class for the service ('Rajdhani
 Express', 'Shatabdi Express', 'Superfast Express', 'Mail/Express', 'Train on
