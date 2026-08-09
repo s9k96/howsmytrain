@@ -27,7 +27,7 @@ const inline = html.match(/<script>([\s\S]*?)<\/script>/);
 assert.ok(inline, "health.html should contain one inline <script> block");
 vm.runInContext(inline[1], ctx);
 
-const { findIncidents, failuresByHour, missedIn } = ctx;
+const { findIncidents, failuresByHour, missedIn, pollsByArrivalDate } = ctx;
 const GAP = vm.runInContext("INCIDENT_GAP_MIN", ctx);
 
 // Heartbeats every 15 min from a base time. `bad` marks the ones where every
@@ -140,5 +140,34 @@ assert.strictEqual(missedIn(outage, [{ ...train, run_days: ["mon"] }], [bad(50)]
   "2026-08-08 is a Saturday");
 assert.strictEqual(missedIn(outage, [{ ...train, scheduled_arrival: null }], [bad(50)]), 0);
 
-console.log(`health: 28 outage-grouping assertions pass `
+// ---- polls are filed by departure, the page counts arrivals ---------------
+// 04014 departs 15:40 and arrives 20:15 the next day, so the journey arriving
+// Aug 8 is filed under Aug 7. Looking it up by arrival date found nothing and
+// reported the train missed -- while it was being polled correctly every day.
+const overnight = { train_number: "04014", arrival_day_offset: 1 };
+const sameDay = { train_number: "12005", arrival_day_offset: 0 };
+const keyed = pollsByArrivalDate(
+  [{ train_number: "04014", journey_date: "2026-08-07" },
+   { train_number: "12005", journey_date: "2026-08-07" }],
+  [overnight, sameDay],
+);
+assert.ok(keyed["2026-08-08"].has("04014"), "an overnight run counts on the day it arrives");
+assert.ok(!(keyed["2026-08-07"] || new Set()).has("04014"),
+  "and not on the day it departed, or it vouches for a journey it is not");
+assert.ok(keyed["2026-08-07"].has("12005"), "a same-day train is unaffected");
+
+// Month boundaries have to roll over, not produce "2026-07-32".
+const rolled = pollsByArrivalDate([{ train_number: "04014", journey_date: "2026-07-31" }], [overnight]);
+assert.ok(rolled["2026-08-01"].has("04014"));
+
+// A two-day run lands two days later; a poll with no journey_date is dropped
+// rather than keyed to NaN.
+const twoDay = pollsByArrivalDate([{ train_number: "12423", journey_date: "2026-08-06" },
+                                   { train_number: "12423", journey_date: null }],
+                                  [{ train_number: "12423", arrival_day_offset: 2 }]);
+assert.ok(twoDay["2026-08-08"].has("12423"));
+assert.strictEqual(Object.keys(twoDay).length, 1);
+
+
+console.log(`health: 34 outage and coverage-keying assertions pass `
   + `(tolerance ${GAP} min, both failure kinds, cost in missed windows)`);

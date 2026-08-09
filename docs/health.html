@@ -442,9 +442,37 @@ function renderLoad(trains, now) {
     }).join("")}</div>`;
 }
 
-function render(trains, polls, runs, now) {
+/**
+ * Which trains we have a reading for, keyed by the date they ARRIVED.
+ *
+ * A poll is filed under `journey_date`, the date the run departed its source,
+ * because that is what RailRadar's startDate reports. Every other number on
+ * this page is about arrivals: a day's "expected" is the trains scheduled to
+ * arrive on it. Comparing the two directly is off by arrival_day_offset, and
+ * it passes anyway on most days for the worst possible reason -- a daily train
+ * has *some* row under that date, just belonging to a different journey. Only
+ * the most recent day fails to line up, which is precisely the window the
+ * attention table reads, so 04014 was reported missed every day while being
+ * polled correctly every day.
+ */
+function pollsByArrivalDate(polls, trains) {
+  const offset = {};
+  for (const t of trains) offset[t.train_number] = t.arrival_day_offset || 0;
+
   const byDate = {};
-  for (const p of polls) (byDate[p.journey_date] ||= new Set()).add(p.train_number);
+  for (const p of polls) {
+    if (!p.journey_date) continue;
+    // Built from parts in local time: new Date("2026-08-07") is parsed as UTC
+    // midnight, which is the previous day for any viewer behind UTC.
+    const [y, m, d] = String(p.journey_date).split("-").map(Number);
+    const arrived = new Date(y, m - 1, d + (offset[p.train_number] || 0));
+    (byDate[isoDate(arrived)] ||= new Set()).add(p.train_number);
+  }
+  return byDate;
+}
+
+function render(trains, polls, runs, now) {
+  const byDate = pollsByArrivalDate(polls, trains);
 
   const today = isoDate(now);
   // A train can only be missed on days it was actually being tracked. Without
@@ -461,7 +489,13 @@ function render(trains, polls, runs, now) {
     );
     const got = byDate[key] || new Set();
     const missed = expectedTrains.filter(t => !got.has(t.train_number));
-    rows.push({ key, d, expected: expectedTrains.length, actual: got.size, missed });
+    // Counted against the expected set, not as every reading filed on that
+    // date. Today holds readings for trains whose windows have not closed yet
+    // -- an early poll, or a follow-up chasing a late run -- and those are not
+    // evidence about the journeys being scored. Counting them gave today 18
+    // of 14, which reads as 129% coverage.
+    rows.push({ key, d, expected: expectedTrains.length,
+                actual: expectedTrains.length - missed.length, missed });
   }
 
   // Only days from the first poll onward -- before that there was nothing to miss.
