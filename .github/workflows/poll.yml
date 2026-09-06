@@ -5,6 +5,20 @@ name: Poll train delays
 # NOT one cron per train: arrival times shift with the timetable, and GitHub's
 # scheduled runs drift 5-20 minutes under load (and occasionally skip). A wide
 # due-window plus frequent cheap checks tolerates both.
+# ---------------------------------------------------------------------------
+# PAUSED 2026-09-06 -- both automatic triggers are commented out below.
+#
+# Why: the RailRadar free sandbox plan is 1,000 requests/MONTH (their docs,
+# "Rate Limits"), not the 50/day this repo was budgeted against. August's
+# allotment ran out on 08-23 at 05:30Z and every call since has returned 429.
+# The September quota has not freed it either -- zero successful polls between
+# 09-01 and 09-06 -- so the ~96 runs/day were spending nothing but 429s while
+# turning the Actions log red and mailing a failure notice every 15 minutes.
+#
+# To resume: uncomment `repository_dispatch` and `schedule` below. Do NOT do
+# that before the request budget in scripts/poll_due.py is cut to ~33/day and
+# poll_all stops retrying through a rate limit -- otherwise this repeats.
+# ---------------------------------------------------------------------------
 on:
   # PRIMARY trigger. GitHub's `schedule` is throttled hard on this repo --
   # measured over two days it delivers roughly one run every two hours no
@@ -17,12 +31,12 @@ on:
   #   https://api.github.com/repos/<owner>/<repo>/dispatches
   #   {"event_type": "poll"}
   # See README -> "Scheduling background polling".
-  repository_dispatch:
-    types: [poll]
+  # repository_dispatch:      # PAUSED -- see banner above
+  #   types: [poll]
 
   # FALLBACK only. Unreliable, but free and occasionally catches something
   # if the external trigger goes down. Costs no API calls when nothing is due.
-  schedule:
+  # schedule:                # PAUSED -- see banner above
     # Asking every 10 min to actually GET one every ~30.
     #
     # GitHub's scheduler is best-effort and drops runs under load -- measured
@@ -36,7 +50,7 @@ on:
     # ponytail: brute force. If GitHub's reliability ever matters more than
     # this, move the trigger to an external cron (cron-job.org -> repository
     # dispatch) and drop back to a sparse schedule.
-    - cron: "3,13,23,33,43,53 * * * *"
+    # - cron: "3,13,23,33,43,53 * * * *"
   workflow_dispatch:
     inputs:
       all:
